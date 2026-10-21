@@ -133,7 +133,7 @@ def score(ex: Example, output: str, data: PublicData) -> dict[str, Any]:
         if q is None:
             item["reason"] = why
             return item
-        gold = ex.target
+        gold = ex.meta.get("gold") or ex.target  # a trace's target is the model's own query
     else:
         ok, q = parse_reply(output)
         item["json_ok"] = ok
@@ -147,6 +147,8 @@ def score(ex: Example, output: str, data: PublicData) -> dict[str, Any]:
     item["exact"] = normalise(q) == normalise(gold)
     if ex.dialect == "cypher":
         item["parse_ok"], item["reason"] = cypher_ok(q)
+        if item["parse_ok"] and ex.task == "call":
+            _execute_cypher(ex, q, gold, item)
         return item
     if not SQL_READ.match(q):
         item["reason"] = "not_read_only"
@@ -216,9 +218,58 @@ def summarise(items: Sequence[dict[str, Any]]) -> dict[str, Any]:
             "reasons": dict(Counter(i["reason"] for i in items).most_common(12))}  # fmt: skip
 
 
+_GRAPH: dict[str, Any] = {"db": None, "loaded": None, "tried": False}
+
+
+def _graph():
+    """The local Neo4j that checks Cypher (`cyphercheck`), or None when it doesn't answer."""
+    if not _GRAPH["tried"]:
+        from asktrainer.cyphercheck import Neo4j
+
+        _GRAPH["tried"] = True
+        db = Neo4j()
+        _GRAPH["db"] = db if db.ok() else None
+    return _GRAPH["db"]
+
+
+def _execute_cypher(ex: Example, q: str, gold: str, item: dict[str, Any]) -> None:
+    """exec_ok for a Cypher call: on the question's CypherBench graph, or on graphs made from
+    the prompt's schema (text2cypher); None when no Neo4j answers or nothing is proven."""
+    from asktrainer import cyphercheck as cc
+
+    db = _graph()
+    if db is None:
+        return
+    try:
+        if ex.origin == "cypherbench":
+            graph = ex.meta.get("db_id") or ""
+            if _GRAPH["loaded"] != graph:
+                cc.load(db, *cc.cypherbench_graph(graph), key="eid", keep_key=True, index=True)
+                _GRAPH["loaded"] = graph
+            v = cc.check_on_graph(db, gold, [q])[0]
+        else:
+            _GRAPH["loaded"] = None  # the random graphs replace whatever was loaded
+            v = cc.check_fuzz(db, ex.messages[0].content, gold, [q])[0]
+    except Exception as e:  # the checker or the server: unproven, never a crash in training
+        item["reason"] = f"check_error:{type(e).__name__}"
+        return
+    item["exec_ok"] = {"pass": True, "fail": False}.get(v["verdict"])
+    item["checked_by"] = v.get("checked_by")
+    item["reason"] = v.get("reason") or item["reason"]
+
+
 def verify(examples: Sequence[Example], preds: Sequence[dict[str, str]], data: PublicData):
     by_id = {e.id: e for e in examples}
-    items = [score(by_id[p["id"]], p["output"], data) for p in preds if p["id"] in by_id]
+    todo = [p for p in preds if p["id"] in by_id]
+    # one graph load per CypherBench graph: score grouped by graph, report in the given order
+    order = sorted(
+        range(len(todo)),
+        key=lambda i: (by_id[todo[i]["id"]].origin, by_id[todo[i]["id"]].meta.get("db_id") or ""),
+    )
+    scored: dict[int, dict[str, Any]] = {}
+    for i in order:
+        scored[i] = score(by_id[todo[i]["id"]], todo[i]["output"], data)
+    items = [scored[i] for i in range(len(todo))]
     return {"summary": summarise(items), "items": items}
 
 

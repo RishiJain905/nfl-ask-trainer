@@ -69,6 +69,58 @@ def example(q: dict[str, Any], r: dict[str, Any], split: str, run: str) -> Examp
     )
 
 
+EVAL_THOUGHT = "(the model writes its own thought here: this example is scored, not trained on)"
+
+
+def evalset(
+    public_root: Path, out_dir: Path, per_set: int = 50, seed: int = 0, sets=None
+) -> dict[str, Any]:
+    """Held-out questions in the tool-call format, for the scored evaluation of trained runs:
+    a seeded `per_set` from each public set's *validation* split (never traced or trained on),
+    with the dataset's gold query as the call. Group `evalset`: the trainer generates and scores
+    these but leaves them out of the validation loss (their thought is a placeholder)."""
+    from asktrainer.data import tool_prompt
+
+    sets = sets or ("sqale", "gretel", "text2cypher", "cypherbench")
+    rnd = random.Random(seed)
+    out, counts = [], {}
+    for name in sets:
+        rows = _lines(public_root / name / "examples_val.jsonl")
+        random.Random(f"{seed}-{name}").shuffle(rows)
+        rows = rows[:per_set]
+        counts[name] = len(rows)
+        for ex in rows:
+            p = tool_prompt.from_example_dict(ex, rnd)
+            gold = json.loads(ex["messages"][-1]["content"])["query"]
+            turn = tool_prompt.assistant_turn(EVAL_THOUGHT, p["tool"], gold)
+            out.append(
+                Example.model_validate(
+                    {
+                        "id": f"eval~{ex['id']}",
+                        "origin": ex["origin"],
+                        "task": "call",
+                        "split": "val",
+                        "group": "evalset",
+                        "messages": [
+                            {"role": "system", "content": p["system"]},
+                            {"role": "user", "content": p["user"]},
+                            turn,
+                        ],
+                        "jepa": {"text": ex["jepa"]["text"], "code": gold},
+                        "dialect": ex["dialect"],
+                        "meta": {**(ex.get("meta") or {}), "gold": gold},
+                        "tools": p["tools"],
+                        "thinking": "high",
+                    }
+                )
+            )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_jsonl(out_dir / "examples_val.jsonl", out)
+    stats = {"per_set": counts, "examples": len(out), "seed": seed}
+    (out_dir / "stats.json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
+    return stats
+
+
 def results(run_dir: Path) -> list[dict[str, Any]]:
     """The run's answers, with any later re-check (`rechecks.jsonl`) applied over the verdict."""
     rows = _lines(run_dir / "results.jsonl")

@@ -42,6 +42,14 @@ def test_parse_schema_reads_nodes_types_and_relationships():
     assert len(s["rels"]) == 2  # the rules' "- One statement" line is not a relationship
 
 
+def test_parse_schema_keeps_labels_without_properties():
+    s = cc.parse_schema(
+        "Nodes (properties are STRING unless typed):\n- DOI\n- Author {name}\n"
+        "Relationships:\n- (none)\n"
+    )
+    assert s["nodes"] == {"DOI": {}, "Author": {"name": "STRING"}} and s["rels"] == []
+
+
 def test_literals_are_tied_to_the_properties_they_are_compared_with():
     lits = cc.literals(
         [

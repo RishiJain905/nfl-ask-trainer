@@ -49,11 +49,12 @@ CYPHERBENCH = Path(r"D:\nfl-ml-data\ask\benchmarks\cypherbench")
 FUZZ_SEEDS = (11, 23, 37)
 ORDER_SEED = 53
 NODES_PER_LABEL = 14
-RELS_PER_PATTERN = 24
+RELS_PER_PATTERN = 40  # end nodes skewed: a few nodes get many ("at least 6 reviews")
 MAX_ROWS = 10_000
 # the checking rules' version: a re-check redoes the answers an older version didn't pass
-# (2: the same columns in another order count; names, titles and ids unique per node)
-CHECKER_VERSION = 2
+# (2: the same columns in another order count; names, titles and ids unique per node;
+# 3: denser relationships with skewed end nodes)
+CHECKER_VERSION = 3
 
 
 class CypherError(Exception):
@@ -174,7 +175,9 @@ def load(
 
 # ---- the schema in the prompt and random graphs from it -------------------------------------
 
-NODE_LINE = re.compile(r"^-\s*([A-Za-z_][\w]*)\s*\{(.*)\}\s*$")
+NODE_LINE = re.compile(
+    r"^-\s*([A-Za-z_][\w]*)\s*(?:\{(.*)\})?\s*$"
+)  # a label may have no properties
 REL_LINE = re.compile(
     r"^-\s*\(([A-Za-z_]\w*)\)-\[:([A-Za-z_]\w*)(?:\s*\{(.*)\})?\]->\(([A-Za-z_]\w*)\)\s*$"
 )
@@ -210,7 +213,7 @@ def parse_schema(system: str) -> dict[str, Any]:
             section = None  # "Examples ...", "Rules:": the lists are over
             continue
         if section == "nodes" and (m := NODE_LINE.match(line)):
-            nodes[m.group(1)] = _props(m.group(2))
+            nodes[m.group(1)] = _props(m.group(2) or "")
         elif section == "rels" and (m := REL_LINE.match(line)):
             rels.append((m.group(1), m.group(2), m.group(4), _props(m.group(3) or "")))
     for a, _, b, _ in rels:  # a relationship may name a label the node list left out
@@ -374,7 +377,7 @@ def fuzz_graph(
     for a, t, b, props in schema["rels"]:
         seen = set()
         for _ in range(RELS_PER_PATTERN):
-            i, j = rnd.randrange(NODES_PER_LABEL), rnd.randrange(NODES_PER_LABEL)
+            i, j = rnd.randrange(NODES_PER_LABEL), int(NODES_PER_LABEL * rnd.random() ** 2)
             if (i, j) in seen:
                 continue
             seen.add((i, j))

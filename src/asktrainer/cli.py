@@ -234,6 +234,12 @@ def traces_cmd(args) -> int:
         out = paths.public / f"traces-{args.name}"
         print(json.dumps(traceexport.export(run_dir, out, args.val_share, args.seed)))
         return 0
+    if args.action == "evalset":
+        from asktrainer import traceexport
+
+        n = int(args.per_set) if args.per_set.isdigit() else 50
+        print(json.dumps(traceexport.evalset(paths.public, paths.public / args.name, n, args.seed)))
+        return 0
     plan = traceprep.parse_plan(args.plan)
     cfg = traceprep.prep(
         run_dir,
@@ -290,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
     tr = sub.add_parser(
         "traces", help="thinking-trace runs: `traces prep` writes questions and plan"
     )
-    tr.add_argument("action", choices=["prep", "export"])
+    tr.add_argument("action", choices=["prep", "export", "evalset"])
     tr.add_argument("--name", required=True)
     tr.add_argument("--per-set", default="25", help="N for every set, or sqale:N,gretel:N,...")
     tr.add_argument("--plan", default="high:4,low:2,off:1", help="tries per thinking level")

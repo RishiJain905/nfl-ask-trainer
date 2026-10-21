@@ -587,9 +587,16 @@ def _train(cfg, paths, run_dir, run_name, launched_by, ckpt, wandb_id, device, s
     val_ok = [e for e in mix.val if e.id not in dropped_val]
     nfl_subset = stratified_subset([e for e in val_ok if e.origin == "nfl"], cfg.eval.nfl_n,
                                    cfg.seed)  # fmt: skip
-    public_subset = stratified_subset([e for e in val_ok if e.origin != "nfl"],
+    # held-out `evalset` questions (traceexport.evalset), when the mix has them, are the
+    # scored set and stay out of the val loss (their thought is a placeholder)
+    held = [e for e in val_ok if e.group == "evalset"]
+    public_subset = stratified_subset(held or [e for e in val_ok if e.origin != "nfl"],
                                       cfg.eval.public_n, cfg.seed,
                                       key=lambda e: (e.origin, e.task))  # fmt: skip
+    if held:
+        held_ids = {e.id for e in held}
+        val_feats = [f for f in val_feats if f.id not in held_ids]
+        val_ok = [e for e in val_ok if e.id not in held_ids]
     sample_set = stratified_subset(nfl_subset + public_subset, SAMPLES, cfg.seed,
                                    key=lambda e: (e.origin, e.group))  # fmt: skip
     if cfg.eval.val_loss_n >= 0:
