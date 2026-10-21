@@ -139,6 +139,9 @@ class CheckpointSpec(_Strict):
 
     dir: str = "/mnt/f/nfl-ask-trainer-ckpt"  # <dir>/<run>/step-NNNNNN/ (F: is the NVMe)
     every_steps: int = 20  # optimizer steps between checkpoints (also after each epoch)
+    # also keep the adapter alone every N steps (`<run>/adapter_stepNNNNNN/`, never deleted):
+    # what the scored evaluation (llamaeval) runs on after training (0 = off)
+    adapter_every_steps: int = 0
     keep: int = 2  # complete checkpoints kept
     artifacts: bool = True  # log the adapter to W&B after each epoch and at the end
     artifact_name: str = "ask-finetune-adapter"

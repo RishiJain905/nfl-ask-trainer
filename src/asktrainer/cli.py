@@ -18,6 +18,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from asktrainer.settings import REPO, get_paths
@@ -190,6 +191,42 @@ def predict_cmd(args) -> int:
     return 0
 
 
+def evalrun_cmd(args) -> int:
+    """Score a run's llama.cpp answers to the evalset (llamaeval generate) and add the result
+    to the run's folder and W&B run."""
+    from asktrainer import publiceval
+    from asktrainer.data.schema import read_jsonl
+    from asktrainer.train import log_eval_run, log_scored_eval, resolve_run
+
+    paths = get_paths()
+    run = resolve_run(args.run, paths) if args.run else None
+    exs = read_jsonl(
+        Path(args.examples) if args.examples else paths.public / "evalset" / "examples_val.jsonl"
+    )
+    preds = [
+        json.loads(x)
+        for x in Path(args.preds).read_text(encoding="utf-8").splitlines()
+        if x.strip()
+    ]
+    res = publiceval.verify(exs, preds, publiceval.PublicData(paths.public))
+    res["tag"], res["step"], res["preds"] = args.tag, args.step, str(args.preds)
+    out = (run or Path(args.preds).parent) / f"scores_llamacpp_{args.tag}.json"
+    out.write_text(json.dumps(res, indent=1, default=str), encoding="utf-8")
+    metrics = publiceval.metrics(res)
+    if args.no_wandb:
+        wid = None
+    elif run is not None:
+        wid = log_scored_eval(run, args.tag, args.step, metrics)
+    else:  # the base model: an evaluation run of its own
+        wid = log_eval_run(f"evalset-{args.tag}-{time.strftime('%Y%m%d-%H%M%S')}", args.tag,
+                           metrics, {"preds": str(args.preds), "evalset": len(exs)},
+                           Path(args.preds).parent)  # fmt: skip
+    print(json.dumps({"run": run.name if run else None, "tag": args.tag, "step": args.step,
+                      "scores": str(out),
+                      "wandb": wid, **{k: round(v, 4) for k, v in metrics.items()}}))  # fmt: skip
+    return 0
+
+
 def merge_cmd(args) -> int:
     from asktrainer.modelio import merge_and_save
 
@@ -289,6 +326,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", default=None)
     p.add_argument("--verify", action="store_true", help="score with `nfl ask verify`")
     p.add_argument("--device", default="cuda")
+    ev = sub.add_parser("evalrun", help="score a run's llama.cpp evalset answers (llamaeval)")
+    ev.add_argument("--run", default=None, help="none: the base model (its own W&B eval run)")
+    ev.add_argument("--preds", required=True)
+    ev.add_argument("--tag", required=True, help="e.g. final, step000050")
+    ev.add_argument("--step", type=int, required=True, help="the training step of the adapter")
+    ev.add_argument("--examples", default=None, help="default: <training>/public/evalset")
+    ev.add_argument("--no-wandb", action="store_true")
     m = sub.add_parser("merge", help="merge a run's adapter into a servable bf16 model")
     m.add_argument("--run", required=True)
     m.add_argument("--out", default=None)
@@ -322,6 +366,8 @@ def main(argv: list[str] | None = None) -> int:
         return predict_cmd(args)
     if args.cmd == "merge":
         return merge_cmd(args)
+    if args.cmd == "evalrun":
+        return evalrun_cmd(args)
     if args.cmd == "traces":
         return traces_cmd(args)
     return 2

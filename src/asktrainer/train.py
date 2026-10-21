@@ -342,6 +342,10 @@ def run_loop(
                 metrics = _eval_safely(on_loss, (step,), f"val loss {step}", logger)
                 if metrics:
                     logger.log({**metrics, "epoch": frac}, step)
+            every_adapter = cfg.checkpoint.adapter_every_steps
+            if every_adapter > 0 and step % every_adapter == 0 and not last_of_epoch:
+                model.save_pretrained(str(run_dir / f"adapter_step{step:06d}"),
+                                      save_embedding_layers=False)  # fmt: skip
             if checkpointer is not None and checkpointer.due(step) and not last_of_epoch:
                 save(state)
             if stop_after is not None and step >= stop_after:
@@ -434,6 +438,50 @@ def configure_backends(cfg: TrainConfig, runs_root: Path) -> dict[str, Any]:
         torch.cuda.tunable.set_filename(str(d / "tunableop_results%d.csv"))
         out["tunableop"] = str(d)
     return out
+
+
+def log_scored_eval(run_dir: Path, tag: str, step: int, metrics: dict[str, float]) -> str:
+    """Add a scored evaluation done after training (llamaeval) to the run's W&B run, as
+    `llamacpp/<metric>` against `llamacpp/step` (the training step of the adapter scored)."""
+    import wandb
+
+    rid = (run_dir / "wandb_run_id").read_text(encoding="utf-8").strip()
+    saved = json.loads((run_dir / "run_info.json").read_text(encoding="utf-8"))
+    w = saved.get("wandb") or {}
+    mode, settings = wandb_mode()
+    run = wandb.init(id=rid, resume="must", project=w.get("project"), entity=w.get("entity"),
+                     dir=str(run_dir), mode=mode, settings=settings)  # fmt: skip
+    try:
+        run.define_metric("llamacpp/step")
+        run.define_metric("llamacpp/*", step_metric="llamacpp/step")
+        row = {f"llamacpp/{k.split('/', 1)[1]}": v for k, v in metrics.items()}
+        run.log({"llamacpp/step": step, **row})
+        run.summary[f"llamacpp_{tag}"] = {**row, "step": step}
+        return run.id
+    finally:
+        run.finish()
+
+
+def log_eval_run(name: str, tag: str, metrics: dict[str, float], config: dict[str, Any],
+                 out_dir: Path, launched_by: str = "agent") -> str:  # fmt: skip
+    """A scored evaluation without a training run (the base model): its own W&B run
+    (job type `eval`), the metrics as `llamacpp/<metric>` and in the summary."""
+    import wandb
+
+    from asktrainer.settings import get_paths
+
+    w = get_paths().wandb
+    mode, settings = wandb_mode()
+    run = wandb.init(entity=w.entity, project=w.project, group=w.group, job_type="eval",
+                     name=name, tags=["ask-eval", f"tag:{tag}", f"launched-by:{launched_by}"],
+                     config=config, dir=str(out_dir), mode=mode, settings=settings)  # fmt: skip
+    try:
+        row = {f"llamacpp/{k.split('/', 1)[1]}": v for k, v in metrics.items()}
+        run.log(row)
+        run.summary.update(row)
+        return run.id
+    finally:
+        run.finish()
 
 
 def make_run_name(cfg: TrainConfig, seed: int, name: str | None) -> str:
