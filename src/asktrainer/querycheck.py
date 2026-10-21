@@ -31,6 +31,7 @@ normalising whitespace; anything else is `unverified`.
 
 from __future__ import annotations
 
+import itertools
 import json
 import random
 import re
@@ -152,6 +153,29 @@ def same_results(gold: list[tuple], pred: list[tuple]) -> bool:
         return False
     b = _bags(gold, pred)
     return b is not None and b[0] == b[1]
+
+
+MAX_PERMUTED_COLUMNS = 6
+MAX_PERMUTED_ROWS = 2000
+
+
+def align(gold: list[tuple], pred: list[tuple]) -> list[tuple] | None:
+    """`pred` with its columns in the order that makes it the gold's result, or None. The same
+    columns in another order are the same answer (the question doesn't fix an order)."""
+    if same_results(gold, pred):
+        return pred
+    if not gold or not pred or len(gold[0]) != len(pred[0]):
+        return None
+    n = len(gold[0])
+    if n < 2 or n > MAX_PERMUTED_COLUMNS or len(pred) > MAX_PERMUTED_ROWS:
+        return None
+    for perm in itertools.permutations(range(n)):
+        if perm == tuple(range(n)):
+            continue
+        moved = [tuple(r[i] for i in perm) for r in pred]
+        if same_results(gold, moved):
+            return moved
+    return None
 
 
 def contained_in(pred: list[tuple], pool: list[tuple]) -> bool:
@@ -509,7 +533,7 @@ def check_sql(pred: str, gold: str, schema_script: str | None, real_rows: bool) 
             except Exception as e:
                 out["real"], out["reason"] = False, f"pred:{type(e).__name__}"
                 return out
-            out["real"] = same_results(g, p)
+            out["real"] = align(g, p) is not None
             if not out["real"]:
                 if _tie(db, gold, g, p):
                     out["real"], out["ties"] = None, out.get("ties", 0) + 1
@@ -535,7 +559,7 @@ def check_sql(pred: str, gold: str, schema_script: str | None, real_rows: bool) 
             except Exception as e:
                 out["reason"] = f"pred:{type(e).__name__}"
                 return out
-            if not same_results(g, p):
+            if align(g, p) is None:
                 if _tie(db, gold, g, p):
                     out["ties"] = out.get("ties", 0) + 1
                     continue
@@ -557,8 +581,9 @@ def check_sql(pred: str, gold: str, schema_script: str | None, real_rows: bool) 
                 except Exception as e:
                     out["reason"] = f"pred:{type(e).__name__}"
                     return out
-                if not _ordered_equal(g, p):
-                    out["reason"] = "order_differs" if same_results(g, p) else "fuzz_rows_differ"
+                moved = align(g, p)
+                if moved is None or not _ordered_equal(g, moved):
+                    out["reason"] = "order_differs" if moved is not None else "fuzz_rows_differ"
                     return out
                 out["order_checked"] = True
         except Exception:

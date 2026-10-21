@@ -406,6 +406,110 @@ def test_export_keeps_the_first_passing_answer_per_question_and_level(tmp_path):
     }
 
 
+def test_prep_with_a_mix_gives_each_question_one_level_and_interleaves(tmp_path):
+    from asktrainer import traceprep
+
+    pub = tmp_path / "public"
+    for name in ("sqale", "gretel"):
+        (pub / name).mkdir(parents=True)
+        rows = []
+        for i in range(40):
+            ex = _example()
+            ex.update(id=f"{name}-{i}", origin=name, meta={})
+            rows.append(json.dumps(ex) + "\n")
+        (pub / name / "examples_train.jsonl").write_text("".join(rows), encoding="utf-8")
+    assert traceprep.parse_sizes("25") == 25
+    sizes = traceprep.parse_sizes("sqale:30,gretel:10")
+    mix = traceprep.parse_mix("high:0.6,low:0.3,off:0.1")
+    with pytest.raises(ValueError):
+        traceprep.parse_sizes("spider:5")
+    with pytest.raises(ValueError):
+        traceprep.parse_mix("medium:1")
+    cfg = traceprep.prep(tmp_path / "r", pub, sizes, {}, seed=0, mix=mix, tries=2, budget=1024)
+    qs = [json.loads(x) for x in (tmp_path / "r" / "questions.jsonl").read_text().splitlines()]
+    assert cfg["sets"] == {"sqale": 30, "gretel": 10} and cfg["questions"] == 40
+    assert all(len(q["plan"]) == 1 and next(iter(q["plan"].values())) == 2 for q in qs)
+    assert cfg["requests"] == 80 and sum(cfg["levels"].values()) == 40
+    assert cfg["levels"]["high"] > cfg["levels"]["off"] and cfg["adaptive"]
+    assert cfg["reasoning_budget"] == 1024
+    first = [q["origin"] for q in qs[:20]]
+    assert "gretel" in first  # interleaved, not 30 sqale then 10 gretel
+
+
+def test_adaptive_tracegen_asks_again_only_the_unsolved(tmp_path):
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeServer)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        run = _run_dir(tmp_path)
+        qs = [json.loads(x) for x in (run / "questions.jsonl").read_text().splitlines()]
+        for q, level in zip(qs, ("high", "low", "off"), strict=True):
+            q["plan"] = {level: 2}  # the fake server answers low wrongly, high and off rightly
+        (run / "questions.jsonl").write_text("".join(json.dumps(q) + "\n" for q in qs))
+        cfg = json.loads((run / "config.json").read_text())
+        cfg.update(plan={}, mix={"high": 1, "low": 1, "off": 1}, tries=2, adaptive=True)
+        cfg["requests"] = 6
+        (run / "config.json").write_text(json.dumps(cfg))
+        url = f"http://127.0.0.1:{srv.server_address[1]}"
+        assert tracegen.Run(run, url).go(workers=2) == 0
+        res = [json.loads(x) for x in (run / "results.jsonl").read_text().splitlines()]
+        assert sorted(r["rid"] for r in res) == [
+            "sqale-0#high#0",
+            "sqale-1#low#0",
+            "sqale-1#low#1",
+            "sqale-2#off#0",
+        ]
+        ev = [json.loads(x) for x in (run / "events.jsonl").read_text().splitlines()]
+        assert [e["todo"] for e in ev if e["kind"] == "round"] == [3, 1]
+        # a later re-check that passes an answer counts as solved for the next round
+        (run / "rechecks.jsonl").write_text(
+            json.dumps(
+                {"rid": "sqale-1#low#0", "qid": "sqale-1", "level": "low", "verdict": "pass"}
+            )
+            + "\n"
+        )
+        assert ("sqale-1", "low") in tracegen.Run(run, url).passed
+    finally:
+        srv.shutdown()
+    feed = Path(__file__).resolve().parents[1] / "scripts" / "trace_feed.py"
+    out = subprocess.run(
+        [sys.executable, str(feed), "--run", str(run), "--gpu-dir", str(tmp_path / "none")],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    line = json.loads(out.stdout.strip().splitlines()[-1])
+    assert line["done"] == 4
+    tick = json.loads(Path(line["tick_file"]).read_text(encoding="utf-8"))
+    assert tick["status"]["total"] == 4  # 3 first tries + the 1 the second round asked
+    assert tick["summary"]["pass_at"]["high"] == {"1": 1.0, "2": 1.0}  # solved at try 0
+    # the feed applies the re-check: low's first try now passes
+    assert tick["summary"]["pass_at"]["low"] == {"1": 1.0, "2": 1.0}
+
+
+def test_export_leaves_out_cut_thoughts_and_applies_rechecks(tmp_path):
+    from asktrainer.traceexport import export
+
+    run = _run_dir(tmp_path)
+    cfg = json.loads((run / "config.json").read_text())
+    cfg["reasoning_budget"] = 1024
+    (run / "config.json").write_text(json.dumps(cfg))
+    rows = [  # q0: passed but cut by the budget; q1: failed, passed on a re-check; q2: plain
+        {"rid": "a", "qid": "sqale-0", "level": "high", "try": 0, "verdict": "pass",
+         "query": GOLD, "reasoning": "long", "think_tokens": 1024, "checked_by": "fuzz"},
+        {"rid": "b", "qid": "sqale-1", "level": "high", "try": 0, "verdict": "unverified",
+         "query": GOLD, "reasoning": "ok", "think_tokens": 50, "checked_by": ""},
+        {"rid": "c", "qid": "sqale-2", "level": "low", "try": 0, "verdict": "pass",
+         "query": GOLD, "reasoning": "fine", "think_tokens": 80, "checked_by": "fuzz"},
+    ]  # fmt: skip
+    (run / "results.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    (run / "rechecks.jsonl").write_text(
+        json.dumps({"rid": "b", "verdict": "pass", "checked_by": "graph"}) + "\n"
+    )
+    stats = export(run, tmp_path / "out", val_share=0.0, seed=0)
+    assert stats["train"] == 2 and stats["left_out_cut_by_budget"] == 1
+    assert stats["checked_by"] == {"graph": 1, "fuzz": 1}
+
+
 SPARK = Path("/mnt/f/LOCAL-Models/XHToken/Spark-X2.6-4B")
 
 
