@@ -1,0 +1,36 @@
+# A training smoke run on traced data (task `call`: the model's own thought + one tool call,
+# Spark's native format, thinking on): checks that the trainer renders, masks, trains,
+# generates and scores the new format end to end. Not a measurement of quality.
+#   ask-trainer traces export --name tsmoke-1          # first: the passing traces as examples
+#   ask-trainer train --config configs/traces_smoke.yaml
+name: traces-smoke
+seed: 7
+data:
+  public:
+    traces-tsmoke-1: {train: -1, val: 16}
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+optim:
+  lr: 1.0e-4
+  epochs: 1
+  batch: 1
+  grad_accum: 8
+  warmup: 2
+  weight_decay: 0.01
+  max_len: 6144
+jepa:
+  enabled: false
+  lam: 1.0
+  k: 0
+eval:
+  every_steps: 5
+  public_n: 16
+  max_new_tokens: {route: 96, generate: 512, call: 1536}
+  gen_batch: 8
+  val_batch: 2
+checkpoint:
+  every_steps: 4
+  keep: 2
+log_every: 1

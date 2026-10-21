@@ -1,7 +1,11 @@
 """Turn an `Example` into token ids, labels and the LLM-JEPA views; collate and batch them.
 
-The model sees exactly what Ask sends it at inference: the chat template rendered with
-`enable_thinking=False` (Spark-X2.6's no-thinking mode: the bot turn opens `<|Bot|></think>`).
+The model sees exactly what it gets at inference: the chat template rendered with
+`enable_thinking=False` (Spark-X2.6's no-thinking mode: the bot turn opens `<|Bot|></think>`)
+for JSON-reply examples; a `call` example (thinking + one tool call) is rendered with its tools
+and its thinking level (`enable_thinking`, `reasoning_effort`), so its prompt ends
+`<|Bot|><think>` and the trained turn is `reasoning</think><tool_call>...</tool_call>` plus the
+end token (thinking off: the prompt ends `<|Bot|></think>`).
 The loss is on the assistant turn only: every token up to and including the generation prompt
 is masked (-100), the assistant content and its closing end token (`<｜end▁of▁sentence｜>`)
 are trained. The prompt rendering must be a token-level prefix of the full rendering (checked
@@ -23,6 +27,7 @@ from __future__ import annotations
 import random
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 import torch
 
@@ -89,12 +94,19 @@ class ChatTokenizer:
                 raise ValueError(f"predictor token {t!r} is not a single token: {ids}")
 
     # -- rendering -----------------------------------------------------------------------
-    def render(self, messages: list[dict[str, str]], add_generation_prompt: bool = False) -> str:
+    def render(
+        self,
+        messages: list[dict[str, Any]],
+        add_generation_prompt: bool = False,
+        ex: Example | None = None,
+    ) -> str:
+        kwargs: dict[str, Any] = {"enable_thinking": False}
+        if ex is not None and ex.task == "call":
+            kwargs["tools"] = ex.tools
+            if ex.thinking in ("high", "low"):
+                kwargs.update(enable_thinking=True, reasoning_effort=ex.thinking)
         return self.tok.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=add_generation_prompt,
-            enable_thinking=False,
+            messages, tokenize=False, add_generation_prompt=add_generation_prompt, **kwargs
         )
 
     def encode(self, text: str) -> list[int]:
@@ -103,11 +115,10 @@ class ChatTokenizer:
 
     def prompt_ids(self, ex: Example) -> list[int]:
         """The generation prompt (ends `<|Bot|></think>`), as Ask sends it."""
-        return self.encode(self.render(ex.prompt_messages, add_generation_prompt=True))
+        return self.encode(self.render(ex.prompt_messages, add_generation_prompt=True, ex=ex))
 
     def full_ids(self, ex: Example) -> tuple[list[int], int]:
-        msgs = [m.model_dump() for m in ex.messages]
-        full = self.encode(self.render(msgs))
+        full = self.encode(self.render(ex.chat_messages, ex=ex))
         prompt = self.prompt_ids(ex)
         if full[: len(prompt)] != prompt:
             raise ValueError(f"{ex.id}: the prompt rendering is not a token prefix of the chat")

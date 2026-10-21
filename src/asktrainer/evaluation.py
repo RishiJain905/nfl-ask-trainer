@@ -159,7 +159,11 @@ def predict(
                 stats[f"val/generate_s/{task}"] = time.perf_counter() - t0
                 stats[f"val/generated_tokens/{task}"] = float(sum(len(o) for o in outs))
             for e, o in zip(exs, outs, strict=True):
-                texts[e.id] = ct.tok.decode(o, skip_special_tokens=True).strip()
+                if task == "call":  # the tags are special tokens: keep them, drop the end token
+                    o = [t for t in o if t not in (ct.eos_id, ct.pad_id)]
+                    texts[e.id] = ct.tok.decode(o, skip_special_tokens=False).strip()
+                else:
+                    texts[e.id] = ct.tok.decode(o, skip_special_tokens=True).strip()
     finally:
         model.train(was_training)
     return [{"id": e.id, "output": texts[e.id]} for e in examples]

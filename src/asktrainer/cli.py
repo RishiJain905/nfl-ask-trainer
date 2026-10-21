@@ -221,6 +221,26 @@ def public_cmd(rest: list[str]) -> int:
     return subprocess.call([sys.executable, "-m", "asktrainer.data.public", *rest])
 
 
+def traces_cmd(args) -> int:
+    """`traces prep` writes a run's questions and plan (generation runs on Windows);
+    `traces export` turns its passing answers into `call` training examples."""
+    from asktrainer import traceprep
+
+    paths = get_paths()
+    run_dir = paths.traces / args.name
+    if args.action == "export":
+        from asktrainer import traceexport
+
+        out = paths.public / f"traces-{args.name}"
+        print(json.dumps(traceexport.export(run_dir, out, args.val_share, args.seed)))
+        return 0
+    plan = traceprep.parse_plan(args.plan)
+    cfg = traceprep.prep(run_dir, paths.public, args.per_set, plan, seed=args.seed)
+    keys = ("questions", "requests", "plan", "sets")
+    print(json.dumps({"run": str(run_dir), **{k: cfg[k] for k in keys}}))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["public"]:
@@ -258,6 +278,15 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--run", required=True)
     m.add_argument("--out", default=None)
     m.add_argument("--device", default="cuda")
+    tr = sub.add_parser(
+        "traces", help="thinking-trace runs: `traces prep` writes questions and plan"
+    )
+    tr.add_argument("action", choices=["prep", "export"])
+    tr.add_argument("--name", required=True)
+    tr.add_argument("--per-set", type=int, default=25)
+    tr.add_argument("--plan", default="high:4,low:2,off:1", help="tries per thinking level")
+    tr.add_argument("--seed", type=int, default=0)
+    tr.add_argument("--val-share", type=float, default=0.1, help="export: questions held out")
     sub.add_parser("probe", help="run scripts/probe_model.py (extra args passed through)")
     sub.add_parser("public", help="public datasets (python -m asktrainer.data.public ...)")
     args, rest = ap.parse_known_args(argv)
@@ -273,6 +302,8 @@ def main(argv: list[str] | None = None) -> int:
         return predict_cmd(args)
     if args.cmd == "merge":
         return merge_cmd(args)
+    if args.cmd == "traces":
+        return traces_cmd(args)
     return 2
 
 

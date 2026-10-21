@@ -31,6 +31,7 @@ class Paths(BaseModel):
     data_root: Path
     training_dir: str = "ask/training"
     runs_dir: str = "ask/finetune"
+    traces_dir: str = "ask/traces"
     base_model: Path
     nfl_repo: Path
     uv_exe: Path
@@ -43,6 +44,11 @@ class Paths(BaseModel):
     @property
     def runs(self) -> Path:
         return self.data_root / self.runs_dir
+
+    @property
+    def traces(self) -> Path:
+        """Thinking-trace generation runs (`traces/<run>/`)."""
+        return self.data_root / self.traces_dir
 
     @property
     def public(self) -> Path:
