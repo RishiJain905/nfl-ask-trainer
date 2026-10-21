@@ -25,6 +25,7 @@ import datetime as dt
 import glob
 import json
 import os
+import re
 import statistics
 import subprocess
 from pathlib import Path
@@ -115,6 +116,33 @@ def train_rows(log: list[dict]) -> tuple[list[list], list[dict]]:
             row.append(num(r.get("epoch")))
             points.append(row)
     return points, evals
+
+
+SCORED_TAG = re.compile(r"^scores_llamacpp_(final|step\d+)\.json$")
+
+
+def scored_evals(run: Path) -> dict[str, dict]:
+    """The scored evaluations done after training through llama.cpp (`ask-trainer evalrun`:
+    `scores_llamacpp_<tag>.json`), as {tag: {"step", "metrics"}} with the same metric names as
+    the trainer's own (val/public/exec_acc, val/<set>/exec_acc, ...)."""
+    out: dict[str, dict] = {}
+    for f in sorted(run.glob("scores_llamacpp_*.json")):
+        if not SCORED_TAG.match(f.name):
+            continue  # test tags (e.g. pipeline-test) are not part of the run's curve
+        res = read_json(f) or {}
+        summ = res.get("summary") or {}
+        metrics: dict[str, float] = {}
+        for name, block in [("public", summ.get("all") or {}), *(summ.get("set") or {}).items()]:
+            for m in ("json_ok", "parse_ok", "exact", "exec_acc"):
+                if block.get(m) is not None:
+                    metrics[f"val/{name}/{m}"] = num(block[m])
+            if block.get("n") is not None:
+                metrics[f"val/{name}/n"] = num(block["n"])
+        out[f.name[len("scores_llamacpp_") : -len(".json")]] = {
+            "step": res.get("step"),
+            "metrics": metrics,
+        }
+    return out
 
 
 def eval_doc(r: dict) -> dict:
@@ -299,6 +327,21 @@ def main() -> None:
         d = eval_doc(r)
         d["samples"] = samples_for(run, r.get("step"), r.get("epoch"))
         new_evals.append(d)
+    # scores from after training join the evaluation at their step (the page keys by step)
+    scored_sent = set(state.get("scored_sent", []))
+    by_step = {r.get("step"): r for r in evals}
+    for tag, sc in scored_evals(run).items():
+        if tag in scored_sent or sc["step"] is None:
+            continue
+        base = by_step.get(sc["step"]) or {"step": sc["step"], "ts": None}
+        d = eval_doc(base)
+        d["metrics"].update(sc["metrics"])
+        d["samples"] = []
+        new_evals = [e for e in new_evals if e["step"] != sc["step"]] + [d]
+        scored_sent.add(tag)
+        for e in evals:  # its merged form now stands for that step
+            if e.get("step") == sc["step"]:
+                e.update(sc["metrics"])
     new_events = events[state["events_sent"] :]
     started = parse_ts(info.get("started_at")) or (parse_ts(points[0][1]) if points else None)
     since = parse_ts(state["gpu_last"]) or started
@@ -340,6 +383,7 @@ def main() -> None:
     state.update(
         seq=seq, steps_sent=sorted(sent_steps | {p[0] for p in new_points}),
         evals_sent=sorted(sent_evals | {e["step"] for e in new_evals}),
+        scored_sent=sorted(scored_sent),
         events_sent=len(events), gpu_last=gpu[-1][0] if gpu else state["gpu_last"],
         last_tick_at=tick["made_at"], run_doc=True,
     )  # fmt: skip
