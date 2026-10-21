@@ -83,13 +83,16 @@ td.code { font-family: var(--mono); font-size: 0.76rem; white-space: pre-wrap; w
 .check { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 0.86rem; }
 .empty { text-align: center; padding: 40px 16px; color: var(--ink-2); }
 .empty h2 { font-size: 1.05rem; margin-bottom: 6px; }
+td.think { font-size: 0.76rem; color: var(--ink-2); white-space: pre-wrap; word-break: break-word; max-width: 40ch; }
+td .u { color: var(--muted); font-size: 0.74rem; display: block; }
+.clip { max-height: 10.5em; overflow-y: auto; }
 </style>
 
 <div class="wrap">
   <div class="top">
     <div>
       <h1>Spark SFT Trials</h1>
-      <div class="sub">Smoke runs and pilots of the Spark-X2.6-4B database-agent fine-tune, from the runs' own log files</div>
+      <div class="sub">Smoke runs, thinking-trace runs and pilots of the Spark-X2.6-4B database-agent fine-tune, from the runs' own log files</div>
     </div>
     <div class="picker">
       <label for="run-picker" class="sub">Run</label>
@@ -99,7 +102,7 @@ td.code { font-family: var(--mono); font-size: 0.76rem; white-space: pre-wrap; w
 
   <div id="empty" class="card empty" hidden>
     <h2>No runs here yet</h2>
-    <p>Claude adds each smoke or pilot run when it starts, then updates it every few minutes from the run's log files. Nothing on this page is typed in by hand.</p>
+    <p>Claude adds each smoke, trace or pilot run when it starts, then updates it every few minutes from the run's log files. Nothing on this page is typed in by hand.</p>
   </div>
   <div id="nodb" class="card empty" hidden>
     <h2>The live data isn't available in this view</h2>
@@ -116,7 +119,7 @@ td.code { font-family: var(--mono); font-size: 0.76rem; white-space: pre-wrap; w
         <div class="sub" id="updated">—</div>
       </div>
       <div>
-        <div class="progress" role="progressbar" aria-label="Training progress" id="prog" aria-valuemin="0" aria-valuemax="100"><div></div></div>
+        <div class="progress" role="progressbar" aria-label="Run progress" id="prog" aria-valuemin="0" aria-valuemax="100"><div></div></div>
         <div class="sub" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:4px">
           <span id="progtext">—</span><span id="eta">—</span>
         </div>
@@ -124,6 +127,7 @@ td.code { font-family: var(--mono); font-size: 0.76rem; white-space: pre-wrap; w
       <div class="tiles" id="tiles"></div>
     </div>
 
+    <div id="train-view" style="display:flex;flex-direction:column;gap:18px">
     <div class="grid">
       <div class="card"><div class="chart-head"><h2>Training loss on answer tokens</h2><div class="legend" id="lg-ce"></div></div><div class="chart" id="c-ce"></div><div class="note">Smoothed = exponential moving average of the logged loss (weight 0.1), computed on this page.</div></div>
       <div class="card"><div class="chart-head"><h2>Validation loss by dataset</h2><div class="legend" id="lg-vl"></div></div><div class="chart" id="c-vl"></div></div>
@@ -150,6 +154,31 @@ td.code { font-family: var(--mono); font-size: 0.76rem; white-space: pre-wrap; w
     <div class="card">
       <div class="chart-head"><h2>Latest sample generations</h2><span class="sub" id="samples-step"></span></div>
       <div class="tablewrap"><table id="t-samples"><thead><tr><th>Set</th><th>Question</th><th>Model output</th><th>Reference</th><th>Result</th></tr></thead><tbody></tbody></table></div>
+    </div>
+
+    </div>
+
+    <div id="trace-view" hidden style="display:flex;flex-direction:column;gap:18px">
+      <div class="grid">
+        <div class="card"><div class="chart-head"><h2>Answers checked</h2></div><div class="chart" id="c-tr-done"></div><div class="note">Each answer is checked the moment it arrives; the line counts answers written to the run's results file.</div></div>
+        <div class="card"><div class="chart-head"><h2>Generation speed</h2></div><div class="chart" id="c-tr-tps"></div><div class="note">Tokens generated per second across all parallel requests (thought and tool call), from the generator's 10-second totals, averaged over a minute.</div></div>
+        <div class="card"><div class="chart-head"><h2>Thinking length by level</h2><div class="legend" id="lg-tr-hist"></div></div><div class="chart" id="c-tr-hist"></div><div class="note">Share of each level's answers by the length of the thought in tokens (counted by the server's own tokenizer). Each bin is labelled by its lower edge.</div></div>
+        <div class="card"><div class="chart-head"><h2>GPU memory in use, whole card</h2></div><div class="chart" id="c-tr-vram"></div><div class="note">Windows' dedicated-memory counter, every 15 s.</div></div>
+      </div>
+      <div class="card">
+        <div class="chart-head"><h2>Pass rate by dataset and thinking level</h2></div>
+        <div class="tablewrap"><table id="t-tr-pass"><thead><tr><th>Dataset</th><th class="n">High</th><th class="n">Low</th><th class="n">Off</th><th class="n">All levels</th><th class="n">Questions solved</th></tr></thead><tbody></tbody></table></div>
+        <div class="note">Pass rate = passed ÷ (passed + failed). Answers that can't be checked yet are counted apart as unverified: Cypher until its graphs are downloaded, and SQL whose reference returns no rows on every database. SQL is checked by running both queries on the real rows (gretel) and on three randomly filled copies of the schema.</div>
+      </div>
+      <div class="grid">
+        <div class="card"><div class="chart-head"><h2>Solved within k tries</h2></div><div class="tablewrap"><table id="t-tr-passk"><thead></thead><tbody></tbody></table></div><div class="note">Share of checkable questions with at least one passing answer among their first k tries, per thinking level.</div></div>
+        <div class="card"><div class="chart-head"><h2>Thinking and timing</h2></div><div class="tablewrap"><table id="t-tr-levels"><thead><tr><th>Level</th><th class="n">Answers</th><th class="n">Median thought</th><th class="n">90th pct</th><th class="n">Median seconds</th><th class="n">Cut off</th></tr></thead><tbody></tbody></table></div><div class="note">Thought lengths in tokens. Seconds per answer while sharing the GPU with the other parallel requests.</div></div>
+        <div class="card"><div class="chart-head"><h2>Why answers failed</h2></div><div class="tablewrap"><table id="t-tr-reasons"><thead><tr><th>Reason</th><th class="n">Answers</th></tr></thead><tbody></tbody></table></div></div>
+      </div>
+      <div class="card">
+        <div class="chart-head"><h2>Latest answers</h2><span class="sub" id="tr-samples-note"></span></div>
+        <div class="tablewrap"><table id="t-tr-samples"><thead><tr><th>Set · level</th><th>Question</th><th>Thinking</th><th>Query</th><th>Reference</th><th>Result</th></tr></thead><tbody></tbody></table></div>
+      </div>
     </div>
 
     <div class="card">
@@ -330,6 +359,43 @@ td.code { font-family: var(--mono); font-size: 0.76rem; white-space: pre-wrap; w
     parts.forEach(function (p) { var sp = el("span"); var b = el("b"); b.style.background = css(p.color); b.style.height = "8px"; b.style.width = "8px"; sp.appendChild(b); sp.appendChild(document.createTextNode(p.name)); legendBox.appendChild(sp); });
   }
 
+  // ---- grouped columns: one column per group in each category, hover lists the groups ------
+  function groupedColumns(box, legendBox, cats, groups, opts) {
+    box.textContent = ""; legendBox.textContent = "";
+    var maxV = 0; groups.forEach(function (g) { g.values.forEach(function (v) { if (v > maxV) maxV = v; }); });
+    if (!maxV) { box.appendChild(el("div", { "class": "empty-chart" }, opts.empty || "No data yet")); return; }
+    var W = 600, H = 210, L = 44, R = 10, T = 10, B = 26;
+    var yt = niceTicks(0, maxV, 4), y1 = yt.ticks[yt.ticks.length - 1] || 1;
+    var Y = function (v) { return T + (1 - v / y1) * (H - T - B); };
+    var svg = sv("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": opts.label || "chart" });
+    yt.ticks.forEach(function (t) {
+      svg.appendChild(sv("line", { x1: L, x2: W - R, y1: Y(t), y2: Y(t), stroke: css("--grid"), "stroke-width": 1 }));
+      var tx = sv("text", { x: L - 6, y: Y(t) + 3.5, "text-anchor": "end" }); tx.textContent = opts.yFmt(t); svg.appendChild(tx);
+    });
+    var band = (W - L - R) / cats.length, gap = 2, gw = Math.max(3, Math.min(12, (band * 0.8 - gap * (groups.length - 1)) / groups.length));
+    var tip = el("div", { "class": "tip" }); tip.hidden = true;
+    cats.forEach(function (c, i) {
+      var x0 = L + band * i + (band - (gw * groups.length + gap * (groups.length - 1))) / 2, g = sv("g", { tabindex: "0" });
+      groups.forEach(function (gr, j) {
+        var v = gr.values[i] || 0; if (!v) return;
+        var y = Y(v); g.appendChild(sv("rect", { x: x0 + j * (gw + gap), y: y, width: gw, height: Math.max(1, Y(0) - y), rx: 2, fill: css(gr.color) }));
+      });
+      var tx = sv("text", { x: L + band * (i + 0.5), y: H - 8, "text-anchor": "middle" }); tx.textContent = c; svg.appendChild(tx);
+      g.appendChild(sv("rect", { x: L + band * i, y: T, width: band, height: H - T - B, fill: "transparent" }));
+      function on() {
+        tip.textContent = ""; tip.appendChild(el("div", { "class": "t" }, (opts.catName || "") + c));
+        groups.forEach(function (gr) { var rr = el("div", { "class": "r" }); var nm = el("span"); var ii = el("i"); ii.style.background = css(gr.color); nm.appendChild(ii); nm.appendChild(document.createTextNode(gr.name)); rr.appendChild(nm); rr.appendChild(el("b", null, opts.tipFmt(gr, i))); tip.appendChild(rr); });
+        tip.hidden = false; var bwid = box.clientWidth; tip.style.left = Math.min((L + band * (i + 0.5)) / W * bwid + 10, bwid - tip.offsetWidth - 4) + "px"; tip.style.top = "6px";
+      }
+      g.addEventListener("pointerenter", on); g.addEventListener("focus", on);
+      g.addEventListener("pointerleave", function () { tip.hidden = true; }); g.addEventListener("blur", function () { tip.hidden = true; });
+      svg.appendChild(g);
+    });
+    svg.appendChild(sv("line", { x1: L, x2: W - R, y1: H - B, y2: H - B, stroke: css("--axis"), "stroke-width": 1 }));
+    box.appendChild(svg); box.appendChild(tip);
+    groups.forEach(function (gr) { var sp = el("span"); var b = el("b"); b.style.background = css(gr.color); b.style.height = "8px"; b.style.width = "8px"; sp.appendChild(b); sp.appendChild(document.createTextNode(gr.name)); legendBox.appendChild(sp); });
+  }
+
   // ---- merging the ticks ------------------------------------------------------------------------
   function merge(ticks) {
     var m = { points: {}, evals: {}, events: [], gpu: {}, status: null, wandb: null, cols: null, seen: {} };
@@ -364,7 +430,142 @@ td.code { font-family: var(--mono); font-size: 0.76rem; white-space: pre-wrap; w
     waiting: { label: "Not started", color: "--muted" }
   };
 
+  // ---- trace runs ---------------------------------------------------------------------------------
+  var LEVELS = [["high", "--s1"], ["low", "--s2"], ["off", "--s3"]];
+  var REASONS = [["rows_differ", "wrong rows on the real data"], ["fuzz_rows_differ", "wrong rows on a filled copy"], ["parse:", "invalid SQL"],
+    ["pred:", "query failed to run"], ["syntax:", "invalid Cypher"], ["no_call", "no tool call"], ["truncated", "cut off at the token limit"],
+    ["wrong_tool", "called the wrong tool"], ["several_calls", "more than one call"], ["bad_argument", "call without a query"],
+    ["not_read_only", "not a read-only query"], ["multiple_statements", "more than one statement"], ["no_graph", "Cypher: no graph to run on yet"],
+    ["no_rows_returned", "reference returns no rows"], ["no_schema", "no schema to check against"], ["check_error", "checker error"]];
+  function reasonText(r) { for (var i = 0; i < REASONS.length; i++) if ((r || "").indexOf(REASONS[i][0]) === 0) return REASONS[i][1] + (r.length > REASONS[i][0].length && REASONS[i][0].slice(-1) === ":" ? " (" + r.slice(REASONS[i][0].length) + ")" : ""); return r || "—"; }
+  function mergeTrace(ticks) {
+    var m = { prog: {}, events: [], gpu: {}, status: null, summary: null, samples: [], seen: {} };
+    ticks.forEach(function (t) {
+      (t.progress || []).forEach(function (r) { m.prog[r[0]] = r; });
+      (t.events || []).forEach(function (e) { var k = (e.ts || "") + "|" + e.kind + "|" + (e.rid || ""); if (!m.seen[k]) { m.seen[k] = 1; m.events.push(e); } });
+      (t.gpu || []).forEach(function (g) { m.gpu[g[0]] = g; });
+      if (t.status) m.status = t.status;
+      if (t.summary) m.summary = t.summary;
+      if (t.samples && t.samples.length) m.samples = t.samples;
+    });
+    m.pr = Object.keys(m.prog).sort().map(function (k) { return m.prog[k]; });
+    m.gp = Object.keys(m.gpu).sort().map(function (k) { return m.gpu[k]; });
+    return m;
+  }
+  function cellRate(b) {
+    if (!b || !b.n) return "—";
+    var checked = b.pass + b.fail;
+    return (checked ? pct(b.pass / checked) + " of " + checked : "none checked") + (b.unverified ? " · " + b.unverified + " unverified" : "");
+  }
+  function renderTrace(meta, ticks) {
+    var m = mergeTrace(ticks), st = m.status || {}, info = (meta && meta.info) || {}, sm = m.summary || {};
+    var s = STATE[st.state] || STATE.waiting;
+    if (st.state === "stalled") s = { label: "Stalled: no answer for 15 min", color: "--warning" };
+    var pill = document.getElementById("state");
+    pill.querySelector("i").style.background = css(s.color); pill.querySelector("span").textContent = s.label;
+    var chips = document.getElementById("chips"); chips.textContent = "";
+    var plan = info.plan || {};
+    ["thinking traces", Object.keys(plan).map(function (k) { return k + " ×" + plan[k]; }).join(" · "), info.questions ? info.questions + " questions" : null,
+     info.sampling ? "temperature " + info.sampling.temperature : null, info.workers ? info.workers + " at once" : null].filter(Boolean)
+      .forEach(function (c) { chips.appendChild(el("span", { "class": "chip" }, String(c))); });
+    document.getElementById("updated").textContent = "Updated " + ago(st.updated_at) + (st.last_result_at ? " · last answer " + ago(st.last_result_at) : "");
+    var frac = st.total ? Math.min(1, (st.done || 0) / st.total) : 0;
+    var prog = document.getElementById("prog"); prog.firstElementChild.style.width = (frac * 100).toFixed(1) + "%"; prog.setAttribute("aria-valuenow", Math.round(frac * 100));
+    document.getElementById("progtext").textContent = (st.done || 0) + " of " + (st.total || "?") + " answers" + (st.errors ? " · " + st.errors + " failed requests" : "");
+    document.getElementById("eta").textContent = st.state === "done" ? "Finished" : st.eta_s != null ? "About " + dur(st.eta_s) + " left (from the last few minutes' pace)" : "";
+    var ov = sm.overall || {}, bl = sm.by_level || {};
+    var tiles = [
+      ["Answers", fmtNum(st.done || 0, 0), "of " + (st.total || "?") + " planned"],
+      ["Pass rate", ov.pass_rate != null ? pct(ov.pass_rate) : "—", (ov.pass || 0) + " passed, " + (ov.fail || 0) + " failed"],
+      ["Unverified", ov.n ? pct(ov.unverified / ov.n) : "—", Object.keys(sm.by_set || {}).filter(function (k) { return sm.by_set[k].unverified; })
+        .sort(function (a, b) { return sm.by_set[b].unverified - sm.by_set[a].unverified; }).slice(0, 2)
+        .map(function (k) { return k + " " + sm.by_set[k].unverified; }).join(" · ") || "none"],
+      ["Speed", st.gen_tok_s_recent != null ? fmtNum(st.gen_tok_s_recent, 0) + " tok/s" : "—", st.answers_per_min != null ? fmtNum(st.answers_per_min, 1) + " answers a minute" : "last 2 minutes"],
+      ["Median thought", bl.high && bl.high.think_p50 != null ? fmtNum(bl.high.think_p50, 0) + " tok" : "—", "high" + (bl.low && bl.low.think_p50 != null ? "; low " + fmtNum(bl.low.think_p50, 0) : "")],
+      ["Tokens generated", fmtNum(sm.completion_tokens || 0), fmtNum(sm.think_tokens || 0) + " of them thinking"]
+    ];
+    var tb = document.getElementById("tiles"); tb.textContent = "";
+    tiles.forEach(function (t) { var d = el("div", { "class": "tile" }); d.appendChild(el("span", { "class": "k" }, t[0])); d.appendChild(el("span", { "class": "v" }, t[1])); d.appendChild(el("span", { "class": "s" }, t[2])); tb.appendChild(d); });
+
+    lineChart(document.getElementById("c-tr-done"), null, { label: "Answers checked over time", xTime: true, yMin: 0, yFmt: function (v) { return fmtNum(v, 0); },
+      series: [{ name: "answers", color: "--s1", data: m.pr.map(function (r) { return [Date.parse(r[0]), r[1]]; }) }], empty: "No answers yet" });
+    var tps = [];
+    for (var i = 1; i < m.pr.length; i++) {
+      var j = i; while (j > 0 && (Date.parse(m.pr[i][0]) - Date.parse(m.pr[j - 1][0])) < 60000) j--;
+      if (j === i) j = i - 1;
+      var dt = (Date.parse(m.pr[i][0]) - Date.parse(m.pr[j][0])) / 1000;
+      if (dt > 0) tps.push([Date.parse(m.pr[i][0]), Math.max(0, (m.pr[i][2] - m.pr[j][2]) / dt)]);
+    }
+    lineChart(document.getElementById("c-tr-tps"), null, { label: "Generated tokens per second over time", xTime: true, yMin: 0, yFmt: function (v) { return fmtNum(v, 0); }, series: [{ name: "tokens/s", color: "--s1", data: tps }], empty: "No speed yet" });
+    var hist = sm.hist || {}, edges = null;
+    var groups = LEVELS.filter(function (l) { return hist[l[0]]; }).map(function (l) {
+      var h = hist[l[0]]; edges = h.edges; var n = h.counts.reduce(function (a, b) { return a + b; }, 0) || 1;
+      return { name: l[0], color: l[1], values: h.counts.map(function (c) { return c / n; }), counts: h.counts };
+    });
+    groupedColumns(document.getElementById("c-tr-hist"), document.getElementById("lg-tr-hist"), (edges || []).map(function (e, i) { return i === edges.length - 1 ? e + "+" : String(e); }), groups,
+      { label: "Thinking length by level", yFmt: function (v) { return (v * 100).toFixed(0) + "%"; }, catName: "thought ≥ ", empty: "No answers yet",
+        tipFmt: function (gr, i) { return (gr.values[i] * 100).toFixed(1) + "% (" + gr.counts[i] + ")"; } });
+    lineChart(document.getElementById("c-tr-vram"), null, { label: "GPU memory in use over time", xTime: true, series: [{ name: "GPU memory", color: "--s1", data: m.gp.filter(function (g) { return g[2] != null; }).map(function (g) { return [Date.parse(g[0]), g[2]]; }) }], yMin: 0, yMax: 16, yFmt: function (v) { return v.toFixed(0) + " GB"; }, empty: "No monitor samples for this run" });
+
+    var tp = document.querySelector("#t-tr-pass tbody"); tp.textContent = "";
+    var bs = sm.by_set || {}, bsl = sm.by_set_level || {}, qs = sm.questions || {};
+    Object.keys(bs).concat(["all"]).forEach(function (set) {
+      var tr = el("tr"); tr.appendChild(el("td", null, set === "all" ? "All datasets" : set));
+      LEVELS.forEach(function (l) { tr.appendChild(el("td", { "class": "n" }, set === "all" ? cellRate(bl[l[0]]) : cellRate(bsl[set + "|" + l[0]]))); });
+      tr.appendChild(el("td", { "class": "n" }, cellRate(set === "all" ? ov : bs[set])));
+      var qn = set === "all" ? Object.keys(qs).reduce(function (a, k) { a.seen += qs[k].seen; a.with_pass += qs[k].with_pass; return a; }, { seen: 0, with_pass: 0 }) : qs[set];
+      tr.appendChild(el("td", { "class": "n" }, qn ? qn.with_pass + " of " + qn.seen : "—"));
+      if (set === "all") tr.style.fontWeight = "600";
+      tp.appendChild(tr);
+    });
+    var pk = sm.pass_at || {}, kmax = 0; LEVELS.forEach(function (l) { kmax = Math.max(kmax, Object.keys(pk[l[0]] || {}).length); });
+    var thead = document.querySelector("#t-tr-passk thead"), tbody = document.querySelector("#t-tr-passk tbody"); thead.textContent = ""; tbody.textContent = "";
+    var hr = el("tr"); hr.appendChild(el("th", null, "Level")); for (var k = 1; k <= kmax; k++) hr.appendChild(el("th", { "class": "n" }, "k = " + k)); thead.appendChild(hr);
+    LEVELS.forEach(function (l) { if (!pk[l[0]] || !Object.keys(pk[l[0]]).length) return; var tr = el("tr"); tr.appendChild(el("td", null, l[0])); for (var k2 = 1; k2 <= kmax; k2++) tr.appendChild(el("td", { "class": "n" }, pk[l[0]][String(k2)] != null ? pct(pk[l[0]][String(k2)]) : "")); tbody.appendChild(tr); });
+    if (!tbody.children.length) { var tr0 = el("tr"); tr0.appendChild(el("td", { "class": "muted" }, "No checkable questions yet")); tbody.appendChild(tr0); }
+    var tl = document.querySelector("#t-tr-levels tbody"); tl.textContent = "";
+    LEVELS.forEach(function (l) { var b = bl[l[0]]; if (!b) return; var tr = el("tr"); [l[0], String(b.n), fmtNum(b.think_p50, 0), fmtNum(b.think_p90, 0), fmtNum(b.secs_p50, 1), String(b.truncated || 0)].forEach(function (v, i) { tr.appendChild(el("td", i ? { "class": "n" } : null, v)); }); tl.appendChild(tr); });
+    var trs = document.querySelector("#t-tr-reasons tbody"); trs.textContent = "";
+    Object.keys(sm.reasons || {}).forEach(function (r) { var tr = el("tr"); tr.appendChild(el("td", null, reasonText(r))); tr.appendChild(el("td", { "class": "n" }, String(sm.reasons[r]))); trs.appendChild(tr); });
+    if (!trs.children.length) { var tr1 = el("tr"); tr1.appendChild(el("td", { "class": "muted", colspan: "2" }, "None yet")); trs.appendChild(tr1); }
+    var tsm = document.querySelector("#t-tr-samples tbody"); tsm.textContent = "";
+    document.getElementById("tr-samples-note").textContent = m.samples.length ? "the last " + m.samples.length + " answers written" : "none yet";
+    m.samples.slice().reverse().forEach(function (x) {
+      var tr = el("tr");
+      tr.appendChild(el("td", null, x.set + " · " + x.level));
+      tr.appendChild(el("td", null, x.question || "—"));
+      var th = el("td", { "class": "think" }); th.appendChild(el("div", { "class": "clip" }, x.think || "(no thinking)"));
+      th.appendChild(el("span", { "class": "u" }, x.think_tokens != null ? x.think_tokens + " tokens" : "")); tr.appendChild(th);
+      [x.query, x.gold].forEach(function (v) { var td = el("td", { "class": "code" }); td.appendChild(el("div", { "class": "clip" }, v || "—")); tr.appendChild(td); });
+      var cls = x.verdict === "pass" ? "ok" : x.verdict === "fail" ? "bad" : "muted";
+      var txt = x.verdict === "pass" ? "✓ " + (x.checked_by === "rows+fuzz" ? "right rows (real + filled)" : x.checked_by === "fuzz" ? "right rows (filled copies)" : "exact match")
+        : x.verdict === "fail" ? "✗ " + reasonText(x.reason) : "unverified: " + reasonText(x.reason);
+      var res = el("td"); res.appendChild(el("span", { "class": cls }, txt)); tr.appendChild(res);
+      tsm.appendChild(tr);
+    });
+    renderEvents(m.events);
+  }
+  function renderEvents(events) {
+    var tv = document.querySelector("#t-events tbody"); tv.textContent = "";
+    events.slice(-40).reverse().forEach(function (e) {
+      var tr = el("tr"); tr.appendChild(el("td", null, (e.ts || "").replace("T", " ").slice(0, 19)));
+      tr.appendChild(el("td", { "class": "n" }, e.step == null ? "" : String(e.step)));
+      tr.appendChild(el("td", null, e.kind || ""));
+      var det = Object.keys(e).filter(function (k) { return ["ts", "kind", "step"].indexOf(k) < 0; }).map(function (k) { var v = e[k]; return k + " " + (typeof v === "number" ? fmtNum(v) : typeof v === "object" ? JSON.stringify(v) : String(v)); }).join(" · ");
+      tr.appendChild(el("td", null, det)); tv.appendChild(tr);
+    });
+    if (!events.length) { var tr0 = el("tr"); var td0 = el("td", { colspan: "4", "class": "muted" }, "No events yet."); tr0.appendChild(td0); tv.appendChild(tr0); }
+  }
+
   function render(meta, ticks) {
+    var trace = !!(meta && meta.kind === "trace");
+    document.getElementById("train-view").hidden = trace;
+    document.getElementById("trace-view").hidden = !trace;
+    if (trace) return renderTrace(meta, ticks);
+    return renderTrain(meta, ticks);
+  }
+
+  function renderTrain(meta, ticks) {
     var m = merge(ticks), st = m.status || {}, info = (meta && meta.info) || {};
     var s = STATE[st.state] || STATE.waiting;
     var pill = document.getElementById("state");
@@ -455,15 +656,8 @@ td.code { font-family: var(--mono); font-size: 0.76rem; white-space: pre-wrap; w
       var res = el("td"); res.appendChild(el("span", { "class": cls }, verdict)); tr.appendChild(res);
       ts.appendChild(tr);
     });
-    var tv = document.querySelector("#t-events tbody"); tv.textContent = "";
-    m.events.slice(-40).reverse().forEach(function (e) {
-      var tr = el("tr"); tr.appendChild(el("td", null, (e.ts || "").replace("T", " ").slice(0, 19)));
-      tr.appendChild(el("td", { "class": "n" }, e.step == null ? "" : String(e.step)));
-      tr.appendChild(el("td", null, e.kind || ""));
-      var det = Object.keys(e).filter(function (k) { return ["ts", "kind", "step"].indexOf(k) < 0; }).map(function (k) { var v = e[k]; return k + " " + (typeof v === "number" ? fmtNum(v) : typeof v === "object" ? JSON.stringify(v) : String(v)); }).join(" · ");
-      tr.appendChild(el("td", null, det)); tv.appendChild(tr);
-    });
-    if (!m.events.length) { var tr0 = el("tr"); var td0 = el("td", { colspan: "4", "class": "muted" }, "This run predates the event log."); tr0.appendChild(td0); tv.appendChild(tr0); }
+    renderEvents(m.events);
+    if (!m.events.length) { var tv = document.querySelector("#t-events tbody"); tv.textContent = ""; var tr0 = el("tr"); tr0.appendChild(el("td", { colspan: "4", "class": "muted" }, "This run predates the event log.")); tv.appendChild(tr0); }
   }
 
   // ---- data ------------------------------------------------------------------------------------
@@ -492,7 +686,7 @@ td.code { font-family: var(--mono); font-size: 0.76rem; white-space: pre-wrap; w
       document.getElementById("empty").hidden = names.length > 0;
       document.getElementById("main").hidden = names.length === 0;
       picker.textContent = "";
-      names.forEach(function (n) { var o = el("option", { value: n }, n + (runs[n].info && runs[n].info.objective ? " · " + runs[n].info.objective : "")); picker.appendChild(o); });
+      names.forEach(function (n) { var o = el("option", { value: n }, n + (runs[n].kind === "trace" ? " · thinking traces" : runs[n].info && runs[n].info.objective ? " · " + runs[n].info.objective : "")); picker.appendChild(o); });
       if (!names.length) return;
       var saved = null; try { saved = localStorage.getItem("sft-trials-run"); } catch (e) {}
       var want = current && runs[current] ? current : (saved && runs[saved] ? saved : names[0]);

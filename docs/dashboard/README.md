@@ -63,6 +63,23 @@ Each tick file stays in `<run>/dashboard/`, so a lost update can be pushed again
 already exists is refused, so a double push is harmless). `state.json` there remembers what has
 been sent; deleting the folder re-sends everything as new ticks to a fresh store.
 
+## Thinking-trace runs
+
+Trace runs (`docs/traces.md`) use the same page and store: their run document says
+`kind: "trace"` and the page switches to the trace view (answers over time, generation speed,
+thinking length by level, pass rate by dataset and level, solved within k tries, why answers
+failed, the latest answers with their thoughts, GPU memory). The feed is `scripts/trace_feed.py`
+(standard library, run on Windows, where the generator runs):
+
+    C:\Python314\python.exe -I scripts\trace_feed.py --run D:\nfl-ml-data\ask\traces\<run>
+
+It reads `results.jsonl`, `progress.jsonl`, `events.jsonl`, `tracegen.pid` and the GPU
+monitor, and writes `<run>/dashboard/tick-NNNNN.json` (new progress rows, events and GPU
+samples, plus a summary recomputed from every result) and `run.json` once; push them exactly as
+for training runs (`runs/<run>` and `runs/<run>/ticks/t<seq:05d>`). Status: `running`,
+`stalled` (no answer for 15 minutes), `stopped` (the generator's process is gone without
+`DONE`), `done`.
+
 ## Changing the page
 
 The HTML is `spark-sft-trials.html` (one file: SVG charts drawn by its own script, no

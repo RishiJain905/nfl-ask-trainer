@@ -104,11 +104,12 @@ a { color: var(--accent); }
 <header style="display:flex;flex-direction:column;gap:12px">
   <div class="eyebrow">nfl-ask-trainer · plan for review · 2026-10-21</div>
   <h1>Spark DB-Agent SFT</h1>
-  <p class="lede">LoRA fine-tuning of Spark-X2.6-4B into a small, read-only SQL and Cypher query writer, trained on an RX 7800 XT. The pipeline is built and has passed a smoke run; nothing has been trained for real yet. This page is the plan to approve.</p>
+  <p class="lede">LoRA fine-tuning of Spark-X2.6-4B into a small, read-only SQL and Cypher query writer that thinks before it calls a query tool, trained on an RX 7800 XT. The pipeline is built and has passed a smoke run, and a Q8 copy of the model now runs in llama.cpp to generate the thinking traces; nothing has been trained for real yet. Your decisions of 2026-10-20 are folded in (section 14).</p>
   <div style="display:flex;gap:8px;flex-wrap:wrap">
     <span class="status done">smoke run passed</span>
-    <span class="status">pilots waiting for your OK</span>
-    <span class="status">real run waiting for your OK</span>
+    <span class="status done">Q8 trace server ready (your fork)</span>
+    <span class="status done">trace + training smoke runs passed</span>
+    <span class="status">trace-stage size: your call (section 14)</span>
   </div>
 </header>
 
@@ -118,58 +119,48 @@ a { color: var(--accent); }
     <div class="fact"><span class="k">Base model, frozen</span><span class="v">4.11B · bf16</span><span class="s">Spark-X2.6-4B, 8.2 GB on the GPU</span></div>
     <div class="fact"><span class="k">Trained weights (LoRA)</span><span class="v">31.0M · 0.75%</span><span class="s">rank 16 in every linear layer of 36 blocks</span></div>
     <div class="fact"><span class="k">Public training pool</span><span class="v">95,618 · 61.3M tok</span><span class="s">4 datasets, MIT / Apache-2.0</span></div>
-    <div class="fact"><span class="k">Pilot sweep</span><span class="v">8 × ~4.0M tok</span><span class="s">186 steps, ~1.4 h each, ~11 h in all</span></div>
-    <div class="fact"><span class="k">Real run</span><span class="v">~52M tok</span><span class="s">2,534 steps, ~16–17 h</span></div>
+    <div class="fact"><span class="k">Pilot sweep</span><span class="v">8 × ~4.0M tok</span><span class="s">186 steps, ~1.4 h each before traces</span></div>
+    <div class="fact"><span class="k">Real run</span><span class="v">~52M tok</span><span class="s">2,534 steps, ~16–17 h before traces</span></div>
+    <div class="fact"><span class="k">Trace generator (llama.cpp, Q8_0)</span><span class="v">796 tok/s</span><span class="s">16 requests at once; 99.42% same top token as bf16</span></div>
     <div class="fact"><span class="k">Crash safety</span><span class="v">every 20 steps</span><span class="s">last 2 checkpoints kept, resume in place</span></div>
   </div>
 </section>
 
 <section aria-labelledby="timeline">
   <h2 id="timeline"><span class="n">01</span>The plan, start to finish</h2>
-  <p>GPU hours to scale. The pilots choose the settings on small, equal-sized runs; only the winner gets the long run. Benchmarks need their databases downloaded first, and RL comes after this plan is done.</p>
+  <p>GPU hours to scale where they are known. The model first writes its own thinking traces (section 07); the pilots then choose the settings on small, equal-sized runs, and only the winner gets the long run. Benchmarks need their databases downloaded first, and RL comes after this plan is done.</p>
   <div class="panel scroll">
-    <svg viewBox="0 0 860 150" width="860" height="150" role="img" aria-label="Timeline: smoke runs done, pilot sweep about 11 hours, real run about 16.5 hours, benchmarks about 3 hours, then RL later">
-      <!-- scale: 22 px per GPU hour, origin x=20 -->
-      <line x1="20" y1="96" x2="790" y2="96" stroke="var(--line)" stroke-width="1"/>
-      <g class="ticks">
-        <line x1="20" y1="92" x2="20" y2="100" stroke="var(--muted)"/><text x="20" y="116" text-anchor="middle" class="lbl-muted">0 h</text>
-        <line x1="130" y1="92" x2="130" y2="100" stroke="var(--muted)"/><text x="130" y="116" text-anchor="middle" class="lbl-muted">5</text>
-        <line x1="240" y1="92" x2="240" y2="100" stroke="var(--muted)"/><text x="240" y="116" text-anchor="middle" class="lbl-muted">10</text>
-        <line x1="350" y1="92" x2="350" y2="100" stroke="var(--muted)"/><text x="350" y="116" text-anchor="middle" class="lbl-muted">15</text>
-        <line x1="460" y1="92" x2="460" y2="100" stroke="var(--muted)"/><text x="460" y="116" text-anchor="middle" class="lbl-muted">20</text>
-        <line x1="570" y1="92" x2="570" y2="100" stroke="var(--muted)"/><text x="570" y="116" text-anchor="middle" class="lbl-muted">25</text>
-        <line x1="680" y1="92" x2="680" y2="100" stroke="var(--muted)"/><text x="680" y="116" text-anchor="middle" class="lbl-muted">30</text>
-      </g>
-      <!-- smoke 0.2 h -->
+    <svg viewBox="0 0 860 150" width="860" height="150" role="img" aria-label="Timeline: smoke runs done; a thinking-trace stage whose length is measured first; pilot sweep about 11 hours and real run about 16.5 hours before traces; benchmarks about 3 hours; then RL later">
+      <!-- known stages to scale at 22 px per GPU hour; the trace stage is a placeholder until measured -->
+      <line x1="20" y1="96" x2="812" y2="96" stroke="var(--line)" stroke-width="1"/>
       <rect x="20" y="50" width="5" height="34" rx="2" fill="var(--accent)"/>
       <text x="20" y="40">smoke ✓</text>
-      <!-- pilots ~11 h: 8 runs of ~1.4 h (30.8 px each incl. a 2 px gap) -->
+      <rect x="29" y="50" width="86" height="34" rx="2" fill="none" stroke="var(--accent)" stroke-dasharray="4 3"/>
+      <text x="35" y="71">traces · ? h</text>
+      <text x="29" y="116" class="lbl-muted">measured first</text>
       <g fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1">
-        <rect x="27" y="50" width="29" height="34" rx="2"/><rect x="58" y="50" width="29" height="34" rx="2"/>
-        <rect x="89" y="50" width="29" height="34" rx="2"/><rect x="120" y="50" width="29" height="34" rx="2"/>
-        <rect x="151" y="50" width="29" height="34" rx="2"/><rect x="182" y="50" width="29" height="34" rx="2"/>
-        <rect x="213" y="50" width="29" height="34" rx="2"/><rect x="244" y="50" width="29" height="34" rx="2"/>
+        <rect x="121" y="50" width="29" height="34" rx="2"/><rect x="152" y="50" width="29" height="34" rx="2"/>
+        <rect x="183" y="50" width="29" height="34" rx="2"/><rect x="214" y="50" width="29" height="34" rx="2"/>
+        <rect x="245" y="50" width="29" height="34" rx="2"/><rect x="276" y="50" width="29" height="34" rx="2"/>
+        <rect x="307" y="50" width="29" height="34" rx="2"/><rect x="338" y="50" width="29" height="34" rx="2"/>
       </g>
-      <text x="27" y="40">pilot sweep · P1–P8 · ~11 h</text>
-      <!-- decision -->
-      <line x1="278" y1="44" x2="278" y2="90" stroke="var(--muted)" stroke-dasharray="3 3"/>
-      <text x="281" y="140" class="lbl-muted">pick lr · rank · objective · data size</text>
-      <!-- real run ~16.5 h -->
-      <rect x="282" y="50" width="363" height="34" rx="2" fill="var(--hot-soft)" stroke="var(--hot)"/>
-      <text x="290" y="71">real run · ~52M tokens · ~16.5 h</text>
-      <!-- benchmarks ~3 h -->
-      <rect x="649" y="50" width="66" height="34" rx="2" fill="var(--surface)" stroke="var(--muted)" stroke-dasharray="4 3"/>
-      <text x="649" y="40">benchmarks</text>
-      <!-- RL later, off scale -->
-      <text x="730" y="71" class="lbl-muted">RL →</text>
+      <text x="121" y="40">pilot sweep · P1–P8 · ~11 h*</text>
+      <line x1="372" y1="44" x2="372" y2="90" stroke="var(--muted)" stroke-dasharray="3 3"/>
+      <text x="375" y="140" class="lbl-muted">pick lr · rank · objective · data size</text>
+      <rect x="376" y="50" width="363" height="34" rx="2" fill="var(--hot-soft)" stroke="var(--hot)"/>
+      <text x="384" y="71">real run · ~52M tokens* · ~16.5 h*</text>
+      <rect x="743" y="50" width="66" height="34" rx="2" fill="var(--surface)" stroke="var(--muted)" stroke-dasharray="4 3"/>
+      <text x="743" y="40">benchmarks</text>
+      <text x="816" y="71" class="lbl-muted">RL →</text>
+      <text x="121" y="116" class="lbl-muted">* before thinking traces</text>
     </svg>
   </div>
-  <p class="note">Measured at the general data's ~700-token sequences: 903 tokens/s at batch 1 (955 at batch 2, 935 at 4, 916 at 8), so the bars use ~900 tokens/s plus each run's evaluations.</p>
+  <p class="note">The pilot and real-run bars use the training speed measured on the data without traces (~700-token sequences: 903 tokens/s at batch 1; 955 at batch 2, 935 at 4, 916 at 8) plus each run's evaluations. Thinking traces make every example longer, so those hours will grow; the trace stage's own length and the new hours come from a first measurement on ~100 questions. Trace generation and training never share the GPU.</p>
 </section>
 
 <section aria-labelledby="example">
   <h2 id="example"><span class="n">02</span>What one training example looks like</h2>
-  <p>A real, median-length example (850 tokens) from the SQaLe set. The model reads everything, but the loss only scores the reply: the 81 tokens of the answer plus its end token, about 10% of the sequence. Everything else is context it learns to use, not text it learns to repeat.</p>
+  <p>A real, median-length example (850 tokens) from the SQaLe set, as converted so far. The model reads everything, but the loss only scores the reply: today the 81 tokens of the answer plus its end token, about 10% of the sequence. Everything else is context it learns to use, not text it learns to repeat. In the plan the reply grows: a thinking trace, then the query as a tool call.</p>
   <div class="panel" style="display:flex;flex-direction:column;gap:14px">
     <div class="strip" role="img" aria-label="Token strip of 850 tokens: chat format 19, instructions 31, schema 252, examples 199, rules 183, question 85, answer 81">
       <div class="seg m2" style="flex:19" title="chat format 19"></div>
@@ -190,8 +181,12 @@ a { color: var(--accent); }
     </div>
     <pre class="sample">Question: Determine the total number of verification records associated with the specific users (IDs 162 and 307) ... how many have a status ID of 3 versus how many have a status ID of 1 ...
 
-{"query": "SELECT COUNT(*) as total_records, SUM(CASE WHEN verification_status = 3 THEN 1 ELSE 0 END) as status_3_count, SUM(CASE WHEN verification_status = 1 THEN 1 ELSE 0 END) as status_1_count FROM investment_experience_verification WHERE user_id IN (162, 307)"}</pre>
-    <p class="note">Thinking is off: the chat template's no-thinking mode ends the prompt with <code>&lt;|Bot|&gt;&lt;/think&gt;</code>, so the model answers directly in one JSON object.</p>
+Today (thinking off, one JSON object):
+{"query": "SELECT COUNT(*) as total_records, SUM(CASE WHEN verification_status = 3 THEN 1 ELSE 0 END) as status_3_count, SUM(CASE WHEN verification_status = 1 THEN 1 ELSE 0 END) as status_1_count FROM investment_experience_verification WHERE user_id IN (162, 307)"}
+
+Planned (thinking on, Spark's own tool-call format):
+&lt;|Bot|&gt;&lt;think&gt;[the model's own reasoning, generated and checked in the trace stage]&lt;/think&gt;&lt;tool_call&gt;run_query&lt;arg_key&gt;query&lt;/arg_key&gt;&lt;arg_value&gt;SELECT COUNT(*) as total_records, ... WHERE user_id IN (162, 307)&lt;/arg_value&gt;&lt;/tool_call&gt;</pre>
+    <p class="note">The tool is declared in the system block (<code>## Tools</code>, a JSON function definition), the schema follows it, and the question is the user turn. Every tag in the reply is one special token. The tool's name and argument vary across examples (<code>run_query(query)</code>, <code>execute_sql(sql)</code>, <code>cypher(query)</code>, ...) and some prompts also list an unrelated tool, so the model learns to read the tool definition rather than one name. The reasoning shown is a placeholder: no trace has been generated yet.</p>
   </div>
 </section>
 
@@ -200,16 +195,17 @@ a { color: var(--accent); }
   <p>Each step looks at 32 examples, one at a time, and adds up their gradients before changing any weight. That gives the stability of a 32-example batch with the memory of a single sequence.</p>
   <div class="panel">
     <div class="flow">
-      <div class="st"><b>1 · Tokenise</b><span>Chat template, thinking off. Mask every token before the answer.</span></div>
+      <div class="st"><b>1 · Tokenise</b><span>Chat template, thinking on (high, some low, a few off). Mask every token before the reply.</span></div>
       <div class="st frozen"><b>2 · Forward</b><span>Frozen Spark, bf16, its own attention. Gradient checkpointing keeps memory near 10–13 GB.</span></div>
       <div class="st trained"><b>3 · LoRA</b><span>Rank-16 adapters on q/k/v, out, gate, up, down in all 36 blocks: the only weights that learn.</span></div>
-      <div class="st"><b>4 · Loss</b><span>Cross-entropy on the answer tokens only; logits computed only there. Optionally + λ · JEPA.</span></div>
+      <div class="st"><b>4 · Loss</b><span>Cross-entropy on the reply only (thinking + tool call + end token); logits computed only there. Optionally + λ · JEPA.</span></div>
       <div class="st"><b>5 · Backward</b><span>Gradients flow only into the LoRA weights. Accumulate.</span></div>
       <div class="st trained"><b>6 · Update (after 32)</b><span>Clip the gradient norm to 1.0, AdamW step, next learning rate, zero the gradients.</span></div>
     </div>
     <div class="loop">
       <span><strong>Every 20 steps</strong> save a full checkpoint, keep the last two</span>
-      <span><strong>Every 100 steps</strong> (pilots) / <strong>500</strong> (real run): evaluate</span>
+      <span><strong>Every 50 / 100 steps</strong> (pilots / real run): validation loss</span>
+      <span><strong>Every 100 / 250 steps</strong>: generate and score the held-out set; the best adapter is also kept as <code>best/</code></span>
       <span><strong>Every step</strong> log loss, learning rate, gradient norm, tokens/s, memory to W&amp;B</span>
     </div>
   </div>
@@ -225,14 +221,16 @@ a { color: var(--accent); }
         <tr><td>Method</td><td><span class="mono">LoRA SFT</span></td><td>Full fine-tuning of 4.1B parameters does not fit in 16 GB; LoRA trains 31M and keeps the base untouched (one base, many adapters).</td></tr>
         <tr><td>LoRA rank / alpha / dropout</td><td><span class="mono">16 / 32 / 0.05</span> <span class="tag">pilot</span></td><td>Rank 16 is the usual start; the sweep tries 64 (alpha 128) in case the general data needs more capacity.</td></tr>
         <tr><td>LoRA targets</td><td><span class="mono">q_k_v, out, gate, up, down</span></td><td>Every linear layer of the attention and MLP: LoRA on all of them beats attention-only.</td></tr>
-        <tr><td>Optimizer</td><td><span class="mono">AdamW β 0.9 / 0.999, ε 1e-8, wd 0</span></td><td>The standard for LoRA; no weight decay on the small adapters.</td></tr>
+        <tr><td>Optimizer</td><td><span class="mono">AdamW β 0.9 / 0.999, ε 1e-8, weight decay 0.01</span></td><td>The standard for LoRA. At lr 1e-4 a decay of 0.01 shrinks the adapters by only ~0.1% over the whole run, so it is nearly neutral; not worth a pilot.</td></tr>
         <tr><td>Peak learning rate</td><td><span class="mono">1e-4</span> <span class="tag">pilot</span></td><td>The sweep tries 1e-4, 2e-4 and 4e-4.</td></tr>
-        <tr><td>Schedule</td><td><span class="mono">3% linear warmup, cosine to 0</span></td><td>Warmup avoids early large updates; cosine settles the adapters at the end (chart below).</td></tr>
+        <tr><td>Schedule</td><td><span class="mono">3% linear warmup (at least 10 steps), cosine to 0</span></td><td>Warmup avoids early large updates (3% of a pilot is only 6 steps, hence the floor); cosine settles the adapters at the end (chart below).</td></tr>
         <tr><td>Batch</td><td><span class="mono">1 sequence × 32 accumulated</span></td><td>Batching barely pays on this card: at ~700 tokens, 903 tokens/s at batch 1, 955 at 2, 935 at 4, 916 at 8; at 2k tokens, 761 vs 732. Accumulation gives the same 32-example step with the least memory.</td></tr>
         <tr><td>Tokens per step</td><td class="num">~22,000</td><td>32 examples × ~700 tokens (the pool's mean).</td></tr>
         <tr><td>Gradient clipping</td><td><span class="mono">global norm 1.0</span></td><td>Guards against a rare bad batch.</td></tr>
         <tr><td>Precision</td><td><span class="mono">bf16 base, fp32 LoRA + optimizer + loss</span></td><td>bf16 keeps the frozen model at 8.2 GB; the weights that change stay in full precision.</td></tr>
-        <tr><td>Sequence length</td><td><span class="mono">3,072</span></td><td>The longest training example is 2,992 tokens, so nothing is cut or dropped. See section 06 for 16k / 32k.</td></tr>
+        <tr><td>Sequence length</td><td><span class="mono">3,072 → set from the traced data</span></td><td>Without traces the longest example is 2,992 tokens. Traces lengthen every reply, so the limit is set from the traced data's longest example, up to the card's 8,192 ceiling (section 06).</td></tr>
+        <tr><td>Reply format</td><td><span class="mono">thinking + tool call</span></td><td>Spark's own format (<code>&lt;tool_call&gt;</code> with <code>&lt;arg_key&gt;</code> / <code>&lt;arg_value&gt;</code>), so agent frameworks and llama.cpp parse it as-is. Thinking levels: mostly high, a share of low, a small share off, so all three keep working.</td></tr>
+        <tr><td>Evaluation</td><td><span class="mono">200 held out · loss every 50 · scored every 100</span></td><td>50 per dataset, never trained on. Validation loss every 50 steps (pilots) or 100 (real run); generated and scored every 100 or 250, and at the end. The best-scoring adapter is copied to <code>best/</code>, since the rolling checkpoints keep only the last two.</td></tr>
         <tr><td>Objective</td><td><span class="mono">plain</span> or <span class="mono">+ LLM-JEPA</span> <span class="tag">pilot</span></td><td>JEPA adds λ · (1 − cosine) between the question's and the query's embeddings (arXiv 2509.14252). The paper's best at 3–8B was λ 2, k 0, but in our smoke runs the JEPA distance started near 1.0 while the answer loss was 0.3–0.6, so λ 2 would make JEPA ~4× the main loss. The sweep tries λ 1 / k 0 and λ 0.5 / k 1.</td></tr>
         <tr><td>Data order</td><td><span class="mono">seeded shuffle, seed 42</span></td><td>The same order every run, so pilots differ only in the setting under test.</td></tr>
         <tr><td>GPU kernels</td><td><span class="mono">hipBLASLt on</span></td><td>+23% at 2k tokens for free. TunableOp would add ~8% but spends ~2–3 min tuning each new sequence length.</td></tr>
@@ -288,14 +286,57 @@ a { color: var(--accent); }
     <div class="panel" style="display:flex;flex-direction:column;gap:10px">
       <h3>Why not 16k or 32k</h3>
       <p>The training length only has to cover the longest example, and no example in the pool is longer than 2,992 tokens (99% are under 2,024). A 16k or 32k setting would change nothing in this data. It also doesn't fit: measured at batch 1, <strong>8,192 tokens is the ceiling on this card</strong> (14.9 GB peak, 353 tokens/s), and 10,240 tokens and above run out of memory.</p>
-      <p>Fine-tuning on short sequences leaves the base model's 1M-token context in place. Long multi-step trajectories (schema, several tool calls and results) belong to a later stage; that is when the length question becomes real.</p>
+      <p>Thinking traces add to every example, so the traced data sets the training length: up to 8,192 tokens fits, and anything longer gets its trace capped. Fine-tuning on short sequences leaves the base model's 1M-token context in place. Long multi-step trajectories (schema, several tool calls and results) belong to a later stage.</p>
     </div>
   </div>
 </section>
 
+<section aria-labelledby="traces">
+  <h2 id="traces"><span class="n">07</span>The thinking-trace stage (new)</h2>
+  <p>Thinking stays on, so every training reply needs real reasoning in it. The four datasets have only question and query; training on an empty <code>&lt;think&gt;&lt;/think&gt;</code> under a "think hard" system line would teach the model to skip thinking. So the model writes its own traces first, and only traces that reach a correct query are kept (rejection sampling, as in STaR).</p>
+  <div class="panel">
+    <div class="flow">
+      <div class="st"><b>1 · Serve</b><span>Spark Q8_0 in llama.cpp, 16 requests at once, thinking on.</span></div>
+      <div class="st"><b>2 · Sample</b><span>A few answers per training question, effort high for most, low for a share.</span></div>
+      <div class="st"><b>3 · Check</b><span>Run the tool call's query: SQL in SQLite, Cypher in Neo4j where the graph exists, else match the reference.</span></div>
+      <div class="st trained"><b>4 · Keep</b><span>The first correct answer: its trace and its call become the training reply.</span></div>
+      <div class="st"><b>5 · Hint if none</b><span>Never right: show the reference query, keep reasoning that reaches it, train without the hint (STaR's rationalisation).</span></div>
+    </div>
+  </div>
+  <div class="facts">
+    <div class="fact"><span class="k">Same top token as bf16</span><span class="v">99.42%</span><span class="s">perplexity ratio 1.004 · mean KL 0.0008</span></div>
+    <div class="fact"><span class="k">One request</span><span class="v">89 tok/s</span><span class="s">bf16 in llama.cpp 58 · transformers ~20</span></div>
+    <div class="fact"><span class="k">16 requests at once</span><span class="v">796 tok/s</span><span class="s">bf16 419; flat beyond 16</span></div>
+    <div class="fact"><span class="k">Server on the GPU</span><span class="v">7.6 GB</span><span class="s">4.38 GB model + a shared 64k-token KV pool</span></div>
+  </div>
+  <p class="note">Why the model's own traces: they keep its style and length, so training sharpens its reasoning rather than overwriting it, and the server and checker are the ones RL will use. Why Q8: generation speed is set by how many bytes each token reads, and Q8_0 is half of bf16 while choosing the same top token as bf16 99.42% of the time (24,576 positions of held-out SQL and Cypher text); every kept trace is checked by execution anyway. Details: <code>docs/llamacpp.md</code>, <code>docs/traces.md</code>.</p>
+  <h3>The smoke run (tsmoke-1, 100 questions × 7 answers, on your llama.cpp fork)</h3>
+  <div class="panel scroll">
+    <table>
+      <thead><tr><th></th><th class="num">SQaLe</th><th class="num">gretel</th><th class="num">text2cypher</th><th class="num">CypherBench</th><th class="num">all</th></tr></thead>
+      <tbody>
+        <tr><td>answers passed / checkable</td><td class="num">41 / 165</td><td class="num">43 / 175</td><td class="num">7 / 28</td><td class="num">0 / 17</td><td class="num">91 / 385 (23.6%)</td></tr>
+        <tr><td>lenient (extra columns or column order allowed)</td><td class="num">33.9%</td><td class="num">33.1%</td><td class="num">25%</td><td class="num">0%</td><td class="num">31.4%</td></tr>
+        <tr><td>unverified (no graph yet)</td><td class="num">10</td><td class="num">0</td><td class="num">147</td><td class="num">158</td><td class="num">315</td></tr>
+        <tr><td>questions with a passing answer</td><td class="num">11 / 25</td><td class="num">11 / 25</td><td class="num">2 / 25</td><td class="num">0 / 25</td><td class="num">24 / 100</td></tr>
+        <tr><td>thought tokens, median / 90th pct</td><td class="num">109 / 1,037</td><td class="num">90 / 291</td><td class="num">254 / 1,801</td><td class="num">215 / 1,540</td><td class="num">161 / 1,079</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="note" style="margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:4px">
+    <li><strong>Thinking helps; low is as good as high.</strong> Pass rate: off 14.1%, high 25.1%, low 26.5%; low thinks less (mean 471 vs 670 tokens).</li>
+    <li><strong>Extra tries add little.</strong> Solved within k tries (high): 30.2% at 1, 33.3% at 2, 32.8% at 4. A question is mostly solvable or not.</li>
+    <li><strong>Correct traces are short.</strong> Mean 191 thought tokens for the kept traces vs 517 for all answers; 6 answers hit the 8,192-token cap.</li>
+    <li><strong>Spark explores.</strong> ~8% of failures (11% on gretel) spend the one call looking at the data (<code>SELECT DISTINCT status FROM ...</code>), as an agent with several turns would; another ~8 points are right rows with extra columns.</li>
+    <li><strong>Speed.</strong> 19.6 answers a minute (190 generated + ~230 prompt tokens/s): ~51 minutes per 1,000 answers. The server's RAM prompt cache cost a factor of ~4 until it was turned off.</li>
+    <li><strong>A thinking budget helps (tsmoke-2).</strong> Same 100 questions at low × 2 with <code>--reasoning-budget 1024</code>: 34.9% passed (26.5% without), 41.8% solved within 2 tries, mean thought 321 tokens (471), and 36.3 answers a minute (~27 minutes per 1,000).</li>
+    <li><strong>Training on traces works.</strong> The 47 passing traces trained for 5 steps (loss 0.48 → 0.14) and the model then generated thought + tool call in Spark's format: 9 / 9 valid calls, 5 / 5 gretel answers with the right rows (<code>tsmoke-train-1</code>).</li>
+  </ul>
+</section>
+
 <section aria-labelledby="pilots">
-  <h2 id="pilots"><span class="n">07</span>The pilot sweep</h2>
-  <p>Eight runs on the same fixed sample of ~4.0M tokens (5,950 examples in the full run's proportions, 186 steps), each changing one thing. They're evaluated every 100 steps and at the end. Each run takes ~1.4 h, ~11 h in all.</p>
+  <h2 id="pilots"><span class="n">08</span>The pilot sweep</h2>
+  <p>Eight runs on the same fixed sample (5,950 traced examples in the full run's proportions, 186 steps; ~4.0M tokens before traces), each changing one thing. Validation loss every 50 steps, a scored evaluation every 100 and at the end. Before traces each run took ~1.4 h, ~11 h in all; the traced pilot is re-timed once its token count is known.</p>
   <div class="panel scroll">
     <table>
       <thead><tr><th>Run</th><th>Objective</th><th class="num">Peak lr</th><th class="num">Rank</th><th>Answers</th></tr></thead>
@@ -315,7 +356,7 @@ a { color: var(--accent); }
 </section>
 
 <section aria-labelledby="real">
-  <h2 id="real"><span class="n">08</span>The real run</h2>
+  <h2 id="real"><span class="n">09</span>The real run</h2>
   <p>One pass over ~52M tokens with the pilot's winning settings. The two noisy or narrow sets are capped: gretel's answers are sometimes wrong, and CypherBench has only four training graphs.</p>
   <div class="panel scroll">
     <svg viewBox="0 0 760 44" width="760" height="44" role="img" aria-label="Token share: SQaLe 27.7M, text2cypher 17.5M, gretel 7.1M, CypherBench 2.5M">
@@ -338,11 +379,11 @@ a { color: var(--accent); }
       </tbody>
     </table>
   </div>
-  <p class="note">The table's token counts are estimates from each set's mean length; the draft config (<code>configs/general_full.yaml</code>) counts ~52M training tokens and 2,534 steps once its sampled examples are tokenised: ~16 h at the measured ~900 tokens/s, plus a few minutes per evaluation every 500 steps. Benchmark test sets are never in the training data. Section 12 compares this with a ~100M-token mix.</p>
+  <p class="note">The table's token counts are estimates from each set's mean length; the draft config (<code>configs/general_full.yaml</code>) counts ~52M training tokens and 2,534 steps once its sampled examples are tokenised: ~16 h at the measured ~900 tokens/s, plus a few minutes per evaluation every 500 steps. Benchmark test sets are never in the training data. Section 13 compares this with a ~100M-token mix.</p>
 </section>
 
 <section aria-labelledby="ckpt">
-  <h2 id="ckpt"><span class="n">09</span>Checkpoints and crash recovery</h2>
+  <h2 id="ckpt"><span class="n">10</span>Checkpoints and crash recovery</h2>
   <div class="panel" style="display:flex;flex-direction:column;gap:14px">
     <div class="scroll">
     <svg viewBox="0 0 760 120" width="760" height="120" role="img" aria-label="Checkpoints every 20 steps; after a crash at step 133, steps 100 and 120 are on disk and training resumes from 120">
@@ -371,7 +412,7 @@ a { color: var(--accent); }
 </section>
 
 <section aria-labelledby="wandb">
-  <h2 id="wandb"><span class="n">10</span>What you'll see in W&amp;B</h2>
+  <h2 id="wandb"><span class="n">11</span>What you'll see in W&amp;B</h2>
   <div class="panel scroll">
     <table>
       <thead><tr><th>Chart</th><th>What it tells you</th></tr></thead>
@@ -390,7 +431,7 @@ a { color: var(--accent); }
 </section>
 
 <section aria-labelledby="proven">
-  <h2 id="proven"><span class="n">11</span>Already proven by the smoke run</h2>
+  <h2 id="proven"><span class="n">12</span>Already proven by the smoke run</h2>
   <div class="facts">
     <div class="fact"><span class="k">Model load (from F:)</span><span class="v">34–46 s</span><span class="s">341 s from D:</span></div>
     <div class="fact"><span class="k">Training speed, real data</span><span class="v">554–773 tok/s</span><span class="s">peak 12.7 GB</span></div>
@@ -401,29 +442,41 @@ a { color: var(--accent); }
 </section>
 
 <section aria-labelledby="scale">
-  <h2 id="scale"><span class="n">12</span>Data size: ~52M or ~100M tokens</h2>
+  <h2 id="scale"><span class="n">13</span>Data size: ~52M or ~100M tokens</h2>
   <p>The ~52M figure is what the four sets give with the sampling done so far, not a deliberate cap. More SQL is already on D:: SQaLe-2 has 163,468 usable examples, of which 30,000 are converted (re-converting more takes a few minutes on the CPU). Cypher is the limit: every permissively licensed Cypher set we have is already in, so a bigger mix shows text2cypher twice to keep Cypher at about a third of the tokens.</p>
   <div class="panel scroll">
     <table>
       <thead><tr><th>Mix</th><th class="num">SQaLe</th><th class="num">text2cypher</th><th class="num">gretel</th><th class="num">CypherBench</th><th class="num">Tokens (est.)</th><th class="num">SQL / Cypher</th><th class="num">Steps</th><th class="num">Hours</th></tr></thead>
       <tbody>
-        <tr><td>Draft (section 08)</td><td class="num">30,000</td><td class="num">27,084</td><td class="num">20,000</td><td class="num">4,000</td><td class="num">~55M</td><td class="num">63 / 37%</td><td class="num">2,534</td><td class="num">~16</td></tr>
+        <tr><td>Draft (section 09)</td><td class="num">30,000</td><td class="num">27,084</td><td class="num">20,000</td><td class="num">4,000</td><td class="num">~55M</td><td class="num">63 / 37%</td><td class="num">2,534</td><td class="num">~16</td></tr>
         <tr><td>~100M</td><td class="num">60,000</td><td class="num">27,084 × 2</td><td class="num">20,000</td><td class="num">4,000</td><td class="num">~100M</td><td class="num">62 / 38%</td><td class="num">4,318</td><td class="num">~29–31</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="note">Estimates use each set's mean example length (SQaLe ~920 tokens, text2cypher ~650, gretel ~360, CypherBench ~630); the draft's tokenised count came out ~5% under its estimate (52M vs 55M), so the ~100M mix would tokenise to ~95M. Hours at the measured ~900 tokens/s. SQaLe at 60,000 means up to 7 questions per database instead of 4; gretel and CypherBench stay capped for the reasons in section 08. In pretraining, data repeated up to about four times was found nearly as useful as new data (Muennighoff et al., 2023); here the text2cypher validation loss is the check that the second pass isn't memorising. The pilots decide the size: if the validation scores are still climbing at the end of a ~4M-token pilot, more data helps and the ~100M mix is worth its extra ~14 hours; if they've flattened, the draft mix is enough. A larger mix also favours rank 64 (P4).</p>
+  <p class="note">Estimates use each set's mean example length (SQaLe ~920 tokens, text2cypher ~650, gretel ~360, CypherBench ~630); the draft's tokenised count came out ~5% under its estimate (52M vs 55M), so the ~100M mix would tokenise to ~95M. Hours at the measured ~900 tokens/s. SQaLe at 60,000 means up to 7 questions per database instead of 4; gretel and CypherBench stay capped for the reasons in section 09. In pretraining, data repeated up to about four times was found nearly as useful as new data (Muennighoff et al., 2023); here the text2cypher validation loss is the check that the second pass isn't memorising. The pilots decide the size: if the validation scores are still climbing at the end of a ~4M-token pilot, more data helps and the ~100M mix is worth its extra ~14 hours; if they've flattened, the draft mix is enough. A larger mix also favours rank 64 (P4).</p>
 </section>
 
 <section aria-labelledby="decide">
-  <h2 id="decide"><span class="n">13</span>Decisions for you</h2>
+  <h2 id="decide"><span class="n">14</span>Decided on 2026-10-20</h2>
   <ol class="qs">
-    <li><strong>The reply format.</strong> Today the model answers with one JSON object, <code>{"query": "..."}</code>, which is simple to check and to call from any code. The alternative is Spark's own tool-call format (a <code>run_query</code> call), which agent frameworks understand directly. Recommendation: JSON now, tool calls together with multi-step trajectories in the next stage.</li>
-    <li><strong>The pilot sweep</strong> as in section 07 (eight runs, ~11 h), including the smaller LLM-JEPA weights (λ 1 and 0.5 instead of the paper's 2).</li>
-    <li><strong>The real-run size</strong>: the draft ~52M mix (section 08) or the ~100M mix (section 12), decided by the pilots' curves unless you'd rather fix it now.</li>
-    <li><strong>The checkpoint folder</strong> <code>F:\nfl-ask-trainer-ckpt\</code> (two checkpoints per run, ~0.8 GB).</li>
-    <li><strong>Benchmark downloads</strong>: SQaLe-2's populated databases, CypherBench's graphs, and BIRD / Spider dev databases. Each will be listed with its size before anything is fetched.</li>
+    <li><strong>Reply format:</strong> Spark's own tool-call format, so the model works with any agent framework (sections 02, 04).</li>
+    <li><strong>Thinking:</strong> on, trained on the model's own checked traces from a new stage before the pilots (section 07); mostly high effort, a share of low, a small share off.</li>
+    <li><strong>The pilot sweep:</strong> all eight runs (section 08), on the traced data.</li>
+    <li><strong>The real-run size:</strong> the pilots' curves decide between ~52M and ~100M tokens (section 13; both counted before traces).</li>
+    <li><strong>Checkpoints:</strong> <code>F:\nfl-ask-trainer-ckpt\</code>, the last two plus a <code>best/</code> copy.</li>
+    <li><strong>Settings:</strong> weight decay 0.01; warmup 3% with a 10-step floor; cosine to 0; validation loss every 50 / 100 steps and a scored evaluation every 100 / 250 (section 04).</li>
+    <li><strong>Benchmark downloads:</strong> approved; each is listed with its size before it is fetched.</li>
   </ol>
+  <h3 style="margin-top:8px">Your call: how big the trace stage is</h3>
+  <p>The first smoke run's pace (~51 minutes per 1,000 answers) made tracing every training question too slow on this card (~140 hours for all ~81k questions at 2 tries). Effort low with a 1,024-token thinking budget nearly halves that (~27 minutes per 1,000 answers, with an equal or better pass rate): all ~81k questions at 2 tries would still be ~74 hours, 15k questions ~14 hours. The options, which can be combined:</p>
+  <ol class="qs">
+    <li><strong>Trace a subset</strong>: e.g. 15-20k questions at 2 tries (~14-18 h at effort low with the budget), weighted towards SQL until the Cypher graphs are in.</li>
+    <li><strong>Mix traced and direct examples</strong>: traced examples (thinking on) plus the rest of the data with thinking off, the template's own third mode; the answer skill comes from all the data, the reasoning from the traces.</li>
+    <li><strong>Shorter thoughts</strong>: effort low with a 1,024-token thinking budget (measured: 36.3 vs 19.6 answers a minute, pass rate 34.9% vs 26.5% at low); traces cut by the budget are left out.</li>
+    <li><strong>Download the Cypher graphs first</strong> (approved): 90% of Cypher answers can't be checked without them. CypherBench's sampled graphs are ~56 MB (enough to check answers), its full graphs ~5.2 GB (the official benchmark); SQaLe's populated databases ~4.0 GB; BIRD's databases come from its own site (size checked at download).</li>
+    <li><strong>Later, multi-turn traces</strong>: run Spark's exploratory calls on real rows and let it answer from them (gretel has rows; SQaLe's populated databases are in the approved downloads).</li>
+  </ol>
+  <p class="note">My recommendation: 3 + 4 + 2: download the CypherBench sampled graphs (~56 MB), then trace ~15k questions at effort low with the 1,024-token budget and 2 tries (~14 h), and train the rest of the mix with thinking off. 5 comes with the RL stage.</p>
 </section>
 
 </div>

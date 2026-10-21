@@ -23,6 +23,11 @@ Everything runs inside WSL Ubuntu with the venv `~/venvs/nfl-ask-trainer`:
 | `ask-trainer public ...` | the public-dataset tools (`python -m asktrainer.data.public ...`) |
 | `python scripts/bench_train.py --seqs 700,2048 --batches 1,2` | training throughput on this GPU |
 | `python scripts/bench_generate.py --prompt 2400 --batches 1,4` | generation speed (prefill / decode) |
+| `powershell -File scripts\llamacpp\serve.ps1 [-Bin <build>] [-Stop]` (Windows) | llama-server with the Q8_0 GGUF on port 8090, 16 parallel slots, for mass generation; see `docs/llamacpp.md` |
+| `ask-trainer traces prep --name <run> --per-set 25 --plan high:4,low:2,off:1` | a thinking-trace run's questions and plan (`docs/traces.md`) |
+| `powershell -File scripts\llamacpp\trace_run.ps1 -Run <run>` (Windows) | generate and check the run's answers against the server |
+| `python scripts\trace_feed.py --run <dir>` / `python scripts\trace_report.py --run <dir>` (Windows) | dashboard ticks / the run's summary |
+| `ask-trainer traces export --name <run>` | the passing traces as `call` training examples in `public/traces-<run>/` |
 
 Tests run on the CPU: `HIP_VISIBLE_DEVICES= CUDA_VISIBLE_DEVICES= python -m pytest -q`;
 `ASKTRAINER_GPU_TESTS=1 python -m pytest -m gpu` runs `tests/test_gpu.py` on the real model.
@@ -81,6 +86,13 @@ grad_norm, tokens_per_s, tokens_seen, peak_gb), `epoch`, `val/loss` (per origin)
 later with `wandb sync`). After a resume, steps logged between the last checkpoint and the
 crash are not re-logged by W&B (it drops steps it has already passed); the local log is
 complete.
+
+## llama.cpp (fast generation)
+
+Traces and RL rollouts are generated with llama.cpp, not transformers: a Q8_0 GGUF of the base
+model (99.42% the same top token as bf16, 89 tok/s for one request and 796 tok/s across 16 at once
+vs ~20 tok/s for transformers at batch 1). Build, quantisation, measurements and how to run it:
+`docs/llamacpp.md`.
 
 ## Merged model
 
