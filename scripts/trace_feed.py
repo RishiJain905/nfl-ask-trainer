@@ -129,6 +129,34 @@ def block(rows: list[dict]) -> dict:
     }
 
 
+def solved_by(tries: dict, k: int) -> bool:
+    return any(tries.get(i) == "pass" for i in range(k))
+
+
+def plan_levels(cfg: dict) -> dict:
+    """Tries per level: the plan, or with a mix (one level per question) its levels."""
+    if cfg.get("mix"):
+        return {lv: cfg.get("tries") or 1 for lv in cfg["mix"]}
+    return cfg.get("plan") or {}
+
+
+def expected_total(cfg: dict, events: list[dict], results: list[dict]) -> int:
+    """All planned requests; for an adaptive run the later rounds only ask the unsolved, so
+    their size is the round's own count once it starts, else the first round's fail share."""
+    if not cfg.get("adaptive"):
+        return cfg.get("requests") or 0
+    q = cfg.get("questions") or 0
+    rounds = {e["round"]: e["todo"] for e in events if e.get("kind") == "round"}
+    tries = cfg.get("tries") or 1
+    first = [r for r in results if r.get("try") == 0]
+    passed = sum(1 for r in first if r.get("verdict") == "pass")
+    unsolved = 1 - passed / len(first) if first else 1
+    total = q
+    for i in range(1, tries):
+        total += rounds[i] if i in rounds else round(q * unsolved**i)
+    return total
+
+
 def summary(results: list[dict], plan: dict) -> dict:
     by_set, by_level, by_sl = defaultdict(list), defaultdict(list), defaultdict(list)
     for r in results:
@@ -151,10 +179,10 @@ def summary(results: list[dict], plan: dict) -> dict:
             per_q[r["qid"]][r["try"]] = r.get("verdict")
         ks = {}
         for k in range(1, plan[lv] + 1):
-            qs = [t for t in per_q.values() if all(i in t for i in range(k))]
-            qs = [t for t in qs if any(t[i] in ("pass", "fail") for i in range(k))]
+            qs = [t for t in per_q.values() if solved_by(t, k) or all(i in t for i in range(k))]
+            qs = [t for t in qs if any(t.get(i) in ("pass", "fail") for i in range(k))]
             if qs:
-                ks[str(k)] = sum(1 for t in qs if any(t[i] == "pass" for i in range(k))) / len(qs)
+                ks[str(k)] = sum(1 for t in qs if solved_by(t, k)) / len(qs)
         pass_at[lv] = ks
     q_any = defaultdict(set)
     q_pass = defaultdict(set)
@@ -205,11 +233,16 @@ def main() -> None:
         "run_doc": False,
     }
     results = read_lines(run / "results.jsonl")
+    later = {r["rid"]: r for r in read_lines(run / "rechecks.jsonl") if r.get("rid")}
+    for r in results:  # a later re-check (Cypher on its graphs) replaces the first verdict
+        if r.get("rid") in later:
+            rc = later[r["rid"]]
+            r.update({k: rc[k] for k in ("verdict", "checked_by", "reason") if k in rc})
     progress = read_lines(run / "progress.jsonl")
     events = read_lines(run / "events.jsonl")
     now = dt.datetime.now(dt.UTC)
     started = next((parse_ts(e["ts"]) for e in events if e.get("kind") == "start"), None)
-    total = cfg.get("requests") or 0
+    total = expected_total(cfg, events, results)
     done = len(results)
     kinds = {e.get("kind") for e in events}
     last_res = max((parse_ts(r.get("ts")) for r in results), default=None, key=lambda t: t or now)
@@ -278,7 +311,11 @@ def main() -> None:
             "started_at": started.isoformat() if started else cfg.get("created_at"),
             "info": {
                 "objective": "traces",
-                "plan": cfg.get("plan"),
+                "plan": plan_levels(cfg),
+                "mix": cfg.get("mix"),
+                "levels": cfg.get("levels"),
+                "adaptive": bool(cfg.get("adaptive")),
+                "reasoning_budget": cfg.get("reasoning_budget"),
                 "sets": cfg.get("sets"),
                 "questions": cfg.get("questions"),
                 "requests": total,
@@ -320,7 +357,7 @@ def main() -> None:
         "status": status,
         "progress_cols": ["ts", "done", "completion_tokens", "prompt_tokens", "errors"],
         "progress": new_progress,
-        "summary": summary(results, cfg.get("plan") or {}),
+        "summary": summary(results, plan_levels(cfg)),
         "samples": samples,
         "events": new_events,
         "gpu_cols": ["ts", "gpu_util", "vram_gb", "cpu", "ram_free_gb"],

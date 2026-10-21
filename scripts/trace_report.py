@@ -206,7 +206,8 @@ def main() -> None:
             solved[r["origin"]].add(r["qid"])
     out["questions_solved"] = {k: f"{len(solved[k])} of {len(seen[k])}" for k in sorted(seen)}
     pass_at = {}
-    for lv, n in cfg["plan"].items():
+    levels = {lv: cfg.get("tries") or 1 for lv in cfg["mix"]} if cfg.get("mix") else cfg["plan"]
+    for lv, n in levels.items():
         per_q = defaultdict(dict)
         for r in by_level.get(lv, []):
             per_q[r["qid"]][r["try"]] = r.get("verdict")
@@ -215,11 +216,12 @@ def main() -> None:
             qq = [
                 t
                 for t in per_q.values()
-                if all(i in t for i in range(k)) and any(t[i] in ("pass", "fail") for i in range(k))
+                if (any(t.get(i) == "pass" for i in range(k)) or all(i in t for i in range(k)))
+                and any(t.get(i) in ("pass", "fail") for i in range(k))
             ]
             if qq:
                 ks[k] = round(
-                    sum(1 for t in qq if any(t[i] == "pass" for i in range(k))) / len(qq), 3
+                    sum(1 for t in qq if any(t.get(i) == "pass" for i in range(k))) / len(qq), 3
                 )
         pass_at[lv] = ks
     out["pass_at_k"] = pass_at

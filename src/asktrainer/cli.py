@@ -235,8 +235,17 @@ def traces_cmd(args) -> int:
         print(json.dumps(traceexport.export(run_dir, out, args.val_share, args.seed)))
         return 0
     plan = traceprep.parse_plan(args.plan)
-    cfg = traceprep.prep(run_dir, paths.public, args.per_set, plan, seed=args.seed)
-    keys = ("questions", "requests", "plan", "sets")
+    cfg = traceprep.prep(
+        run_dir,
+        paths.public,
+        traceprep.parse_sizes(args.per_set),
+        plan,
+        seed=args.seed,
+        mix=traceprep.parse_mix(args.mix) if args.mix else None,
+        tries=args.tries,
+        budget=args.budget,
+    )
+    keys = ("questions", "requests", "plan", "mix", "levels", "sets")
     print(json.dumps({"run": str(run_dir), **{k: cfg[k] for k in keys}}))
     return 0
 
@@ -283,8 +292,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     tr.add_argument("action", choices=["prep", "export"])
     tr.add_argument("--name", required=True)
-    tr.add_argument("--per-set", type=int, default=25)
+    tr.add_argument("--per-set", default="25", help="N for every set, or sqale:N,gretel:N,...")
     tr.add_argument("--plan", default="high:4,low:2,off:1", help="tries per thinking level")
+    tr.add_argument(
+        "--mix", default=None, help="one level per question, drawn with these weights: high:W,..."
+    )
+    tr.add_argument("--tries", type=int, default=2, help="with --mix: tries at most, adaptive")
+    tr.add_argument("--budget", type=int, default=None, help="the server's --reasoning-budget")
     tr.add_argument("--seed", type=int, default=0)
     tr.add_argument("--val-share", type=float, default=0.1, help="export: questions held out")
     sub.add_parser("probe", help="run scripts/probe_model.py (extra args passed through)")

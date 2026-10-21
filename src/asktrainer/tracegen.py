@@ -43,6 +43,7 @@ class Run:
             self.questions = [json.loads(line) for line in f if line.strip()]
         self.lock = threading.Lock()
         self.done: set[str] = set()
+        self.passed: set[tuple[str, str]] = set()  # (qid, level) with a passing answer
         self.totals = {"done": 0, "completion_tokens": 0, "prompt_tokens": 0, "errors": 0}
         rp = run_dir / "results.jsonl"
         if rp.exists():  # a restart carries the totals on, so the progress lines stay monotonic
@@ -51,17 +52,43 @@ class Run:
                     if line.strip():
                         r = json.loads(line)
                         self.done.add(r["rid"])
+                        if r.get("verdict") == "pass":
+                            self.passed.add((r["qid"], r["level"]))
                         self.totals["completion_tokens"] += r.get("completion_tokens") or 0
                         self.totals["prompt_tokens"] += r.get("prompt_tokens") or 0
+        self.passed |= self._rechecked_passes()
         self.totals["done"] = len(self.done)
         self.stop = threading.Event()
 
-    def requests(self) -> list[tuple[str, dict[str, Any], str, int]]:
+    def _rechecked_passes(self) -> set[tuple[str, str]]:
+        """Passes found later by a re-check (`rechecks.jsonl`, e.g. Cypher on its graphs)."""
+        p = self.dir / "rechecks.jsonl"
+        if not p.exists():
+            return set()
+        rows = []
+        with p.open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass  # a line the re-check is still writing
+        return {(r["qid"], r["level"]) for r in rows if r.get("verdict") == "pass"}
+
+    def plan_of(self, q: dict[str, Any]) -> dict[str, int]:
+        return q.get("plan") or self.cfg["plan"]
+
+    def total(self) -> int:
+        return sum(sum(self.plan_of(q).values()) for q in self.questions)
+
+    def requests(self, only_try: int | None = None) -> list[tuple[str, dict[str, Any], str, int]]:
+        """All planned requests not yet done; with `only_try`, that try of the (question,
+        level) pairs still without a passing answer (an adaptive round)."""
         out = []
-        plan = self.cfg["plan"]
         for q in self.questions:
-            for level, n in plan.items():
+            for level, n in self.plan_of(q).items():
                 for i in range(n):
+                    if only_try is not None and (i != only_try or (q["qid"], level) in self.passed):
+                        continue
                     rid = f"{q['qid']}#{level}#{i}"
                     if rid not in self.done:
                         out.append((rid, q, level, i))
@@ -172,19 +199,43 @@ class Run:
             f.write(json.dumps({"ts": _now(), **self.totals}) + "\n")
 
     def go(self, workers: int) -> int:
-        todo = self.requests()
-        total = len(self.questions) * sum(self.cfg["plan"].values())
+        adaptive = bool(self.cfg.get("adaptive"))
+        rounds = max((max(self.plan_of(q).values()) for q in self.questions), default=0)
         self.event(
             "start",
             url=self.url,
             workers=workers,
-            todo=len(todo),
-            total=total,
+            todo=len(self.requests()),
+            total=self.total(),
             resumed=len(self.done),
+            adaptive=adaptive,
         )
         self.write_progress()
         threading.Thread(target=self.progress_loop, daemon=True).start()
-        failures = 0
+        failures, state = 0, "done"
+        for rnd in range(rounds) if adaptive else [None]:
+            if rnd is not None:
+                self.passed |= self._rechecked_passes()
+                todo = self.requests(only_try=rnd)
+                self.event("round", round=rnd, todo=len(todo), passed=len(self.passed))
+            else:
+                todo = self.requests()
+            failures, aborted = self._dispatch(todo, workers, failures)
+            if aborted:
+                state = "aborted"
+                break
+        self.stop.set()
+        self.write_progress()
+        self.event(
+            "DONE" if state == "done" else "stopped",
+            done=self.totals["done"],
+            errors=self.totals["errors"],
+        )
+        return 0 if state == "done" else 1
+
+    def _dispatch(
+        self, todo: list[tuple[str, dict[str, Any], str, int]], workers: int, failures: int
+    ) -> tuple[int, bool]:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futs = {pool.submit(self.one, *r): r[0] for r in todo}
             for fut in as_completed(futs):
@@ -201,7 +252,7 @@ class Run:
                     if failures >= 20 and failures > self.totals["done"] // 4:
                         self.event("aborted", reason="too many failed requests")
                         pool.shutdown(wait=False, cancel_futures=True)
-                        break
+                        return failures, True
                     continue
                 with self.lock:
                     with (self.dir / "results.jsonl").open(
@@ -211,15 +262,9 @@ class Run:
                     self.totals["done"] += 1
                     self.totals["completion_tokens"] += res.get("completion_tokens") or 0
                     self.totals["prompt_tokens"] += res.get("prompt_tokens") or 0
-        self.stop.set()
-        self.write_progress()
-        state = "aborted" if failures >= 20 and failures > self.totals["done"] // 4 else "done"
-        self.event(
-            "DONE" if state == "done" else "stopped",
-            done=self.totals["done"],
-            errors=self.totals["errors"],
-        )
-        return 0 if state == "done" else 1
+                    if res.get("verdict") == "pass":
+                        self.passed.add((res["qid"], res["level"]))
+        return failures, False
 
 
 def main(argv: list[str] | None = None) -> int:

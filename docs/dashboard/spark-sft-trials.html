@@ -464,8 +464,10 @@ td .u { color: var(--muted); font-size: 0.74rem; display: block; }
     var pill = document.getElementById("state");
     pill.querySelector("i").style.background = css(s.color); pill.querySelector("span").textContent = s.label;
     var chips = document.getElementById("chips"); chips.textContent = "";
-    var plan = info.plan || {};
-    ["thinking traces", Object.keys(plan).map(function (k) { return k + " ×" + plan[k]; }).join(" · "), info.questions ? info.questions + " questions" : null,
+    var plan = info.plan || {}, lv = info.levels || null;
+    var planChip = lv ? Object.keys(lv).map(function (k) { return k + " " + lv[k]; }).join(" · ") + " questions, up to " + (plan[Object.keys(plan)[0]] || 1) + " tries"
+      : Object.keys(plan).map(function (k) { return k + " ×" + plan[k]; }).join(" · ");
+    ["thinking traces", planChip, info.questions ? info.questions + " questions" : null, info.reasoning_budget ? "thinking budget " + info.reasoning_budget : null,
      info.sampling ? "temperature " + info.sampling.temperature : null, info.workers ? info.workers + " at once" : null].filter(Boolean)
       .forEach(function (c) { chips.appendChild(el("span", { "class": "chip" }, String(c))); });
     document.getElementById("updated").textContent = "Updated " + ago(st.updated_at) + (st.last_result_at ? " · last answer " + ago(st.last_result_at) : "");

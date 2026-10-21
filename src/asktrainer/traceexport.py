@@ -69,14 +69,38 @@ def example(q: dict[str, Any], r: dict[str, Any], split: str, run: str) -> Examp
     )
 
 
+def results(run_dir: Path) -> list[dict[str, Any]]:
+    """The run's answers, with any later re-check (`rechecks.jsonl`) applied over the verdict."""
+    rows = _lines(run_dir / "results.jsonl")
+    rp = run_dir / "rechecks.jsonl"
+    if rp.exists():
+        later = {r["rid"]: r for r in _lines(rp)}
+        for r in rows:
+            if r["rid"] in later:
+                rc = later[r["rid"]]
+                r.update({k: rc[k] for k in ("verdict", "checked_by", "reason") if k in rc})
+    return rows
+
+
+def cut_by_budget(r: dict[str, Any], budget: int | None) -> bool:
+    """A thought the server's --reasoning-budget ended (it then forces the end of thinking)."""
+    return bool(budget) and (r.get("think_tokens") or 0) >= budget * 0.98
+
+
 def export(run_dir: Path, out_dir: Path, val_share: float = 0.1, seed: int = 0) -> dict[str, Any]:
     questions = {q["qid"]: q for q in _lines(run_dir / "questions.jsonl")}
+    cfg = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
+    budget = cfg.get("reasoning_budget")
     best: dict[tuple[str, str], dict[str, Any]] = {}
-    for r in _lines(run_dir / "results.jsonl"):
+    cut = 0
+    for r in results(run_dir):
         if r.get("verdict") != "pass" or not r.get("query"):
             continue
         if r["level"] != "off" and not (r.get("reasoning") or "").strip():
             continue  # thinking on but nothing thought: not a usable trace
+        if r["level"] != "off" and cut_by_budget(r, budget):
+            cut += 1
+            continue
         key = (r["qid"], r["level"])
         if key not in best or r["try"] < best[key]["try"]:
             best[key] = r
@@ -96,6 +120,7 @@ def export(run_dir: Path, out_dir: Path, val_share: float = 0.1, seed: int = 0) 
         "val": len(val),
         "questions": len(qids),
         "val_questions": len(val_q),
+        "left_out_cut_by_budget": cut,
         "by_origin_level": dict(
             sorted(Counter(f"{e.origin}/{e.thinking}" for e in train + val).items())
         ),
