@@ -43,6 +43,8 @@ EVAL_PORT = 8092
 TRACE_PORT = 8090
 BUDGET = 1024
 TIE = 0.005  # exec accuracies this close count as a tie
+# captured output is UTF-8 (WSL, progress bars, W&B's emoji), never the console code page
+TEXT = {"text": True, "encoding": "utf-8", "errors": "replace"}
 
 BASE = {
     "name": "pilot",
@@ -185,16 +187,21 @@ class Sweep:
                 return subprocess.run(["wsl", "-d", "Ubuntu", "--", "bash", "-lc", full],
                                       stdout=f, stderr=subprocess.STDOUT)  # fmt: skip
         return subprocess.run(["wsl", "-d", "Ubuntu", "--", "bash", "-lc", full],
-                              capture_output=True, text=True)  # fmt: skip
+                              capture_output=True, **TEXT)  # fmt: skip
 
     def serve(self, port: int, extra: str = "", stop: bool = False) -> str:
         args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(SERVE),
                 "-Port", str(port)]  # fmt: skip
         args += ["-Stop"] if stop else ["-Extra", extra]
-        r = subprocess.run(args, capture_output=True, text=True)
-        if not stop and "ready" not in r.stdout:
-            raise RuntimeError(f"llama-server did not start: {r.stdout.strip()[:300]}")
-        return r.stdout.strip()
+        # the output goes through a file, not a pipe: llama-server, started by the script,
+        # inherits the script's handles, and a pipe it holds open would never reach its end
+        log = self.dir / f"serve-{port}.log"
+        with log.open("w", encoding="utf-8") as f:
+            subprocess.run(args, stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+        out = log.read_text(encoding="utf-8", errors="replace").strip()
+        if not stop and "ready" not in out:
+            raise RuntimeError(f"llama-server did not start: {out[:300]}")
+        return out
 
     # -- phase 1: the traces ------------------------------------------------------------------
     def traces_done(self) -> bool:
@@ -232,7 +239,7 @@ class Sweep:
              f"$p = Get-Process -Id {pid} -ErrorAction SilentlyContinue; "
              f"if ($p -and $p.ProcessName -eq 'python') "
              f"{{ Stop-Process -Id {pid} -Confirm:$false; 'stopped' }}"],
-            capture_output=True, text=True,
+            capture_output=True, **TEXT,
         )  # fmt: skip
         how = r.stdout.strip() or "already gone"
         ev = DATA / "traces" / self.traces / "events.jsonl"
@@ -248,18 +255,21 @@ class Sweep:
     def finish_traces(self) -> None:
         """After the sweep: the trace run's remaining rounds (it resumes where it stopped)."""
         self.serve(TRACE_PORT, f"--reasoning-budget {BUDGET}")
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-             str(REPO / "scripts" / "llamacpp" / "trace_run.ps1"), "-Run", self.traces],
-            capture_output=True, text=True,
-        )  # fmt: skip
-        self.status(phase="traces-rest", note=r.stdout.strip()[:300])
+        log = self.dir / "trace_run.log"  # a file, not a pipe: tracegen inherits the handles
+        with log.open("w", encoding="utf-8") as f:
+            subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                 str(REPO / "scripts" / "llamacpp" / "trace_run.ps1"), "-Run", self.traces],
+                stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            )  # fmt: skip
+        note = log.read_text(encoding="utf-8", errors="replace").strip()
+        self.status(phase="traces-rest", note=note[:300])
 
     def recheck(self) -> str:
         r = subprocess.run(
             [sys.executable, "-m", "asktrainer.cyphercheck", "recheck", "--run",
              str(DATA / "traces" / self.traces)],
-            capture_output=True, text=True, cwd=REPO,
+            capture_output=True, cwd=REPO, **TEXT,
             env={**_env(), "PYTHONPATH": str(REPO / "src")},
         )  # fmt: skip
         return (r.stdout.strip().splitlines() or [""])[-1]
