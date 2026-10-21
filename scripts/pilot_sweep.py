@@ -153,7 +153,8 @@ def merged(base: dict, over: dict) -> dict:
 
 
 class Sweep:
-    def __init__(self, traces: str):
+    def __init__(self, traces: str, after_round: int | None = None):
+        self.after_round = after_round  # start the pilots once this trace round is done
         self.dir = DATA / "pilots"
         self.dir.mkdir(parents=True, exist_ok=True)
         self.traces = traces
@@ -206,7 +207,46 @@ class Sweep:
                 pass
         if kinds & {"stopped", "aborted"}:
             raise RuntimeError(f"the trace run {self.traces} stopped early: see its events")
-        return "DONE" in kinds
+        if "DONE" in kinds:
+            return True
+        if self.after_round is not None and self._round_started(ev, self.after_round + 1):
+            self.stop_tracegen()  # the rest of the traces runs after the sweep (finish_traces)
+            return True
+        return False
+
+    def _round_started(self, ev: Path, n: int) -> bool:
+        for line in ev.read_text(encoding="utf-8").splitlines():
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if e.get("kind") == "round" and e.get("round", -1) >= n:
+                return True
+        return False
+
+    def stop_tracegen(self) -> None:
+        pid_file = DATA / "traces" / self.traces / "tracegen.pid"
+        pid = pid_file.read_text(encoding="ascii").strip()
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f"$p = Get-Process -Id {pid} -ErrorAction SilentlyContinue; "
+             f"if ($p -and $p.ProcessName -eq 'python') "
+             f"{{ Stop-Process -Id {pid} -Confirm:$false; 'stopped' }}"],
+            capture_output=True, text=True,
+        )  # fmt: skip
+        how = r.stdout.strip() or "already gone"
+        self.status(phase="traces", note=f"round {self.after_round} done: tracegen {pid} {how}; "
+                    "the next rounds run after the sweep")  # fmt: skip
+
+    def finish_traces(self) -> None:
+        """After the sweep: the trace run's remaining rounds (it resumes where it stopped)."""
+        self.serve(TRACE_PORT, f"--reasoning-budget {BUDGET}")
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+             str(REPO / "scripts" / "llamacpp" / "trace_run.ps1"), "-Run", self.traces],
+            capture_output=True, text=True,
+        )  # fmt: skip
+        self.status(phase="traces-rest", note=r.stdout.strip()[:300])
 
     def recheck(self) -> str:
         r = subprocess.run(
@@ -344,6 +384,12 @@ class Sweep:
                 phase="pilot", pilot=p, note="done", final=r["final"], val_loss=r["val_loss"]
             )
         self.status(phase="done", summary=summary(self.state))
+        if self.after_round is not None and not self.traces_finished():
+            self.finish_traces()
+
+    def traces_finished(self) -> bool:
+        ev = DATA / "traces" / self.traces / "events.jsonl"
+        return any('"DONE"' in line for line in ev.read_text(encoding="utf-8").splitlines())
 
 
 def summary(state: dict) -> dict:
@@ -396,8 +442,13 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--traces", default="pilot")
     ap.add_argument("--only", default=None, help="run only these pilots, e.g. P1,P2")
+    ap.add_argument(
+        "--after-round", type=int, default=None,
+        help="start the pilots once this trace round is done (0: the first tries); the rest of "
+        "the trace run resumes after the sweep",
+    )  # fmt: skip
     a = ap.parse_args()
-    sweep = Sweep(a.traces)
+    sweep = Sweep(a.traces, a.after_round)
     import os
 
     (sweep.dir / "driver.pid").write_text(str(os.getpid()), encoding="ascii")  # for watchers
