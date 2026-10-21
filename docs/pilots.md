@@ -89,6 +89,12 @@ ordinary training run in `D:\nfl-ml-data\ask\finetune\pilot-pN\` (W&B, dashboard
 `adapter_step000050/`, `adapter_step000100/`, `adapter/`, and its `preds_llamacpp_*.jsonl` /
 `scores_llamacpp_*.json`.
 
+**Started early (Rishi, 2026-10-21 13:45):** the pilots train on the trace run's **first round**
+only (each question's first try), with `--after-round 0`: the driver stops `tracegen` once round 1
+begins, and resumes it after the sweep, so the second tries (for the unsolved questions) feed the
+real run instead. The pilots compare settings with each other, so ~3,400 vs ~4,700 examples
+doesn't change the ranking, and the pilot results come ~5 hours sooner.
+
 ## Results
 
 (Filled in as the pilots finish.)
