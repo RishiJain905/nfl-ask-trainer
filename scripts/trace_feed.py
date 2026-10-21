@@ -253,7 +253,8 @@ def main() -> None:
     elif started is None:
         st = "waiting"
     elif not alive(run / "tracegen.pid"):
-        st = "stopped"
+        last = [e.get("kind") for e in events if e.get("kind") in ("start", "paused")]
+        st = "paused" if last and last[-1] == "paused" else "stopped"
     elif last_res and (now - last_res).total_seconds() > STALL_S:
         st = "stalled"
     else:
@@ -281,6 +282,11 @@ def main() -> None:
         "gen_tok_s_recent": tok_s,
         "answers_per_min": req_min,
         "eta_s": eta,
+        "paused_reason": next(
+            (e.get("reason") for e in reversed(events) if e.get("kind") == "paused"), None
+        )
+        if st == "paused"
+        else None,
     }
     new_progress = [
         [

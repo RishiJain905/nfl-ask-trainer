@@ -235,6 +235,13 @@ class Sweep:
             capture_output=True, text=True,
         )  # fmt: skip
         how = r.stdout.strip() or "already gone"
+        ev = DATA / "traces" / self.traces / "events.jsonl"
+        why = (
+            f"round {self.after_round} done; the next round runs after the pilot sweep "
+            "(the GPU trains the pilots meanwhile)"
+        )
+        with ev.open("a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps({"ts": now(), "kind": "paused", "reason": why}) + "\n")
         self.status(phase="traces", note=f"round {self.after_round} done: tracegen {pid} {how}; "
                     "the next rounds run after the sweep")  # fmt: skip
 

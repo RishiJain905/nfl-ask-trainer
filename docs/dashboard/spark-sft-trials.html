@@ -427,7 +427,8 @@ td .u { color: var(--muted); font-size: 0.74rem; display: block; }
   var STATE = {
     running: { label: "Running", color: "--good" }, done: { label: "Finished", color: "--good" },
     stalled: { label: "Stalled: no step for 20 min", color: "--warning" }, stopped: { label: "Stopped", color: "--critical" },
-    waiting: { label: "Not started", color: "--muted" }
+    waiting: { label: "Not started", color: "--muted" },
+    paused: { label: "Paused", color: "--warning" }
   };
 
   // ---- trace runs ---------------------------------------------------------------------------------
@@ -461,6 +462,7 @@ td .u { color: var(--muted); font-size: 0.74rem; display: block; }
     var m = mergeTrace(ticks), st = m.status || {}, info = (meta && meta.info) || {}, sm = m.summary || {};
     var s = STATE[st.state] || STATE.waiting;
     if (st.state === "stalled") s = { label: "Stalled: no answer for 15 min", color: "--warning" };
+    if (st.state === "paused") s = { label: "Paused: " + (st.paused_reason || "on purpose"), color: "--warning" };
     var pill = document.getElementById("state");
     pill.querySelector("i").style.background = css(s.color); pill.querySelector("span").textContent = s.label;
     var chips = document.getElementById("chips"); chips.textContent = "";
