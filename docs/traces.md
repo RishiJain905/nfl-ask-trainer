@@ -20,7 +20,8 @@ ones the RL stage will use.
 | `data/tool_prompt.py` | the tool-call prompt: the query tool (its name and argument varied), sometimes an unrelated tool, the schema, up to two tested examples, the rules; the question as the user turn | both |
 | `scripts/llamacpp/serve.ps1` | starts / stops llama-server with the Q8_0 GGUF (`docs/llamacpp.md`) | Windows |
 | `scripts/llamacpp/trace_run.ps1` → `asktrainer.tracegen` | sends every planned request (question x thinking level x try) to the server, 16 at once, checks each answer as it arrives, appends to `results.jsonl` | Windows, standard-library Python |
-| `querycheck.py` | the checker (below) | both |
+| `querycheck.py` | the SQL checker (below) | both |
+| `cyphercheck.py` | the Cypher checker: CypherBench's graphs and schema-built random graphs in a local Neo4j; also re-checks a run's answers (`rechecks.jsonl`) | Windows (WSL reaches it too) |
 | `scripts/trace_feed.py` | turns the run's files into dashboard ticks | Windows |
 
 WSL can't reach a server on Windows' localhost (WSL runs in NAT mode), so everything that talks
@@ -34,7 +35,8 @@ Then:
 
 - **SQL**: read only, one statement, `EXPLAIN` against the schema (unknown tables and columns
   fail). Then both queries run and their results are compared as multisets of rows (numbers at
-  the reference's precision):
+  the reference's precision; the same columns in another order count as the same answer, since
+  the question doesn't fix an order):
   - on the **real rows** where the dataset has them (gretel's own INSERTs);
   - on **four randomly filled copies of the schema** (Spider's test-suite idea, Zhong, Yu and
     Klein 2020): small integer ranges so joins and groups line up, the queries' own literals
@@ -48,8 +50,8 @@ Then:
   - Pass = agreement on at least one copy that returned rows and no disagreement anywhere;
     if no copy returned rows, only an exact match passes, else **unverified**.
 - **Cypher**: a syntax check, then an exact match (whitespace-normalised) passes; anything else
-  is **unverified** until the graphs are downloaded (CypherBench's own graphs; text2cypher's
-  demo databases).
+  is checked on a graph by `cyphercheck.py` (next section), as a re-check after the answer was
+  generated.
 
 Tested on the smoke run's own 100 questions (`tests/test_traces.py` for the unit cases): every
 reference query passes against itself (SQaLe: 19 by filled copies, 6 only by exact match since
@@ -58,6 +60,52 @@ the reference returns no rows there; gretel: 16 by real rows + copies, 9 by copi
 "latest event per group" window function, which only shows when a group has two matching
 events after a four-table join: random data checks are strong, not perfect.
 
+## How a Cypher answer is checked (`cyphercheck.py`)
+
+A local Neo4j holds the graph (`asktrainer-neo4j`: Docker, `neo4j:5.26-community`, auth off,
+HTTP on 127.0.0.1:7476 and Bolt on 7689, nothing else in it; the NFL graphs are separate
+containers). Started with:
+
+```
+docker run -d --name asktrainer-neo4j -p 127.0.0.1:7476:7474 -p 127.0.0.1:7689:7687 -e NEO4J_AUTH=none -e NEO4J_server_memory_heap_max__size=2G -e NEO4J_server_memory_heap_initial__size=1G -e NEO4J_server_memory_pagecache_size=1G -e NEO4J_db_transaction_timeout=20s neo4j:5.26-community
+```
+
+Answers run read-only (the HTTP API's `access-mode: READ` header plus the write-clause guard)
+with a 20-second transaction timeout. Results are compared like SQL's (multisets of rows,
+column order free, ties at a final LIMIT allowed). The final `ORDER BY` / `LIMIT` are the ones
+after the **last** top-level `RETURN` (a `WITH ... ORDER BY ... LIMIT` earlier in the query is
+part of the logic, not the answer's order).
+
+- **CypherBench**: the question's own graph, loaded from the benchmark's *sampled* graphs
+  (`graphs/simplekg_sampled/*.json`: art 5.7 MB, biology 4.2, soccer 11.1, terrorist_attack 1.0;
+  nodes keep `eid`, `name` and their typed properties, dates as Neo4j dates). Gold and answer
+  run on it. Probed on 300 training questions per graph: the gold returns something informative
+  on 96-99% of them (terrorist_attack's sampled graph is the full graph: 300 of 300 give the
+  recorded answer; art 146, biology 228, soccer 133 of 300 give the full graph's recorded answer,
+  which doesn't matter here: gold and answer run on the same graph). All 50 evalset questions
+  (on the seven test graphs) are informative.
+- **text2cypher**: its databases (Neo4j's demo servers) aren't downloadable, so the answer is
+  checked like SQaLe's: on three random graphs built from the schema in the prompt (each label
+  14 nodes with typed properties; each relationship pattern up to 40 relationships, end nodes
+  skewed so a few nodes get many, as "at least 6 reviews" needs; names, titles and ids unique
+  per node as in real data; the queries' literals planted in the properties they're compared
+  with; dates kept as text get date-like values). A sorted gold is also run on a graph with
+  (almost) no ties for the order. A graph where the gold returns nothing, or only zeros and
+  nulls, proves nothing. Of the evalset's 50 text2cypher golds, 25 are provable this way; most
+  of the rest are the dataset's generated "is there a path between X and Y" questions whose
+  prompts list no relationships at all, which no schema-built graph can answer (unverified).
+
+The rules have a version (`CHECKER_VERSION`, now 3); a re-check redoes the answers an older
+version didn't pass. Measured on the pilot run's first 1,800 answers: of text2cypher's re-checked
+answers 15% pass, 75% fail (half are real Cypher syntax errors such as SQL's `GROUP BY`, the
+rest return different rows), 10% unverified; CypherBench 27% pass.
+
+A re-check of a whole run (`python -m asktrainer.cyphercheck recheck --run <dir> [--every 1800]`,
+Windows) appends one line per answer to `rechecks.jsonl`; the export, the dashboard feed and
+`tracegen`'s next round read it over the first verdict (the last line per answer wins). It also
+re-runs SQL answers that failed under an older SQL rule (the column-order rule came after the
+pilot run started).
+
 ## Files of a run (`D:\nfl-ml-data\ask\traces\<run>\`)
 
 | File | Holds |
@@ -65,8 +113,9 @@ events after a four-table join: random data checks are strong, not perfect.
 | `config.json` | the plan (tries per thinking level), sampling (temperature 1.0, top-p 0.95, Spark's own defaults; up to 8,192 new tokens), the seed, the counts |
 | `questions.jsonl` | one line per question: the prompt, tools, the reference query, the checker's schema script |
 | `results.jsonl` | one line per answer: the request, the thought and its token count (the server's own tokenizer), the call, the verdict and why, tokens and seconds |
+| `rechecks.jsonl` | later verdicts (`cyphercheck recheck`): rid, verdict, how it was checked, the checker version |
 | `progress.jsonl` | totals every 10 s (answers, tokens) |
-| `events.jsonl` | start, failed requests, the end |
+| `events.jsonl` | start, each round of an adaptive run, failed requests, the end |
 | `tracegen.pid`, `tracegen.*.txt` | the generator's process id and output |
 | `dashboard/` | the feed's ticks and state |
 
@@ -79,6 +128,12 @@ powershell -File scripts\llamacpp\trace_run.ps1 -Run tsmoke-1
 python scripts\trace_feed.py --run D:\nfl-ml-data\ask\traces\tsmoke-1     # every few minutes; push the tick
 powershell -File scripts\llamacpp\serve.ps1 -Stop
 ```
+
+A run can instead give each question **one** thinking level (`--mix high:0.65,low:0.25,off:0.1`,
+a seeded draw) with up to `--tries` answers there, asked **adaptively**: `tracegen` works in
+rounds, and a question gets its next try only while it has no passing answer at its level
+(including passes found by a re-check). A thought the server's `--reasoning-budget` ended is left
+out of the export (`--budget` records the budget; cut = at least 98% of it).
 
 The live view is the **Spark SFT Trials** dashboard (`docs/dashboard/`), which shows trace runs
 with their own charts: answers over time, generation speed, thinking length by level, pass rate
@@ -179,3 +234,23 @@ quality:
 
 Run folder `D:\nfl-ml-data\ask\finetune\tsmoke-train-1`; W&B run `tsmoke-train-1`
 (`3wdj2bkf`); dashboard `tsmoke-train-1`.
+
+## The pilot trace run (`pilot`, started 2026-10-21 07:32)
+
+The pilots' training data: 15,000 training questions (SQaLe 6,000, gretel 3,000, text2cypher
+5,000, CypherBench 1,000), one level each (high 9,764, low 3,793, off 1,443), up to 2 tries
+adaptively, temperature 1.0, the server's thinking budget 1,024 tokens, 16 requests at once on
+the fork's Spark build. At most 30,000 answers; at the measured ~37 answers a minute, the first
+round (15,000) takes ~6.8 h and the second (the unsolved, ~60%) ~4 h.
+
+```
+ask-trainer traces prep --name pilot --per-set sqale:6000,gretel:3000,text2cypher:5000,cypherbench:1000 --mix high:0.65,low:0.25,off:0.1 --tries 2 --budget 1024 --seed 0
+powershell -File scripts\llamacpp\serve.ps1 -Extra "--reasoning-budget 1024"
+powershell -File scripts\llamacpp\trace_run.ps1 -Run pilot
+```
+
+First measurements (the first ~1,400 answers, 2026-10-21 08:20): 36.6 answers a minute (236
+generated + 437 prompt tokens a second), mean thought 322 tokens, 13% of thoughts reach the
+budget; pass rates SQaLe 29%, gretel 34%, text2cypher 15%, CypherBench 27% (Cypher after the
+re-check). A passing traced example is short: mean 890 tokens (prompt + thought + call), p99
+2,170, longest 2,628, so the pilots train at `max_len` 4,096.

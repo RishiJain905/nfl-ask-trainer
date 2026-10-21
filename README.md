@@ -28,6 +28,12 @@ Everything runs inside WSL Ubuntu with the venv `~/venvs/nfl-ask-trainer`:
 | `powershell -File scripts\llamacpp\trace_run.ps1 -Run <run>` (Windows) | generate and check the run's answers against the server |
 | `python scripts\trace_feed.py --run <dir>` / `python scripts\trace_report.py --run <dir>` (Windows) | dashboard ticks / the run's summary |
 | `ask-trainer traces export --name <run>` | the passing traces as `call` training examples in `public/traces-<run>/` |
+| `ask-trainer traces prep ... --mix high:0.65,low:0.25,off:0.1 --tries 2 --budget 1024` | one thinking level per question, tries asked adaptively (`docs/traces.md`) |
+| `python -m asktrainer.cyphercheck recheck --run <dir> [--every 1800]` (Windows) | check a run's Cypher answers on CypherBench's graphs / schema-built graphs in the local Neo4j (`docs/traces.md`) |
+| `ask-trainer traces evalset --name evalset --per-set 50` | the held-out tool-call questions the pilots are scored on (`docs/pilots.md`) |
+| `python -m asktrainer.llamaeval generate --examples <jsonl> --out <preds> --url <server>` (Windows) | answer them through llama-server (a run's LoRA on the Q8_0 base) |
+| `ask-trainer evalrun --run <run> --preds <preds> --tag <tag> --step N` | score those answers into the run's folder and W&B run (no `--run`: the base model) |
+| `python scripts\pilot_sweep.py` (Windows) | the whole pilot sweep, P1-P8 (`docs/pilots.md`) |
 
 Tests run on the CPU: `HIP_VISIBLE_DEVICES= CUDA_VISIBLE_DEVICES= python -m pytest -q`;
 `ASKTRAINER_GPU_TESTS=1 python -m pytest -m gpu` runs `tests/test_gpu.py` on the real model.
