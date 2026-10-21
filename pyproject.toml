@@ -41,6 +41,11 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+# the prompt templates: their text is the prompt, long lines included
+"src/asktrainer/data/public_prompt.py" = ["E501"]
+"src/asktrainer/data/tool_prompt.py" = ["E501"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["gpu: needs the ROCm GPU and the base model (deselect with -m 'not gpu')"]

@@ -16,7 +16,8 @@ build/
 dist/
 
 # Data, models and runs never live in the repo (they are on D:, see README -> Where things live)
-data/
+# (/data/ = the repo root only: a bare data/ also hid the source package src/asktrainer/data/)
+/data/
 runs/
 outputs/
 checkpoints/
