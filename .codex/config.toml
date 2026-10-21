@@ -1,0 +1,26 @@
+# Project-level Codex config for nfl-ask-trainer (copied from the NFL Analytics Engine).
+#
+# Codex loads this only when the project is trusted. Instructions for Codex live in
+# AGENTS.md at the repo root. Keep both in sync with the Security section of CLAUDE.md.
+#
+# Scope: security only. Nothing here restricts what Codex can review or do otherwise.
+# No secret values go in this file.
+
+# Keep credentials out of every command Codex runs. Codex's built-in filter already drops
+# names matching *KEY*, *SECRET* and *TOKEN*; these patterns restate that and add passwords
+# and credentials (NEO4J_PASSWORD, SMTP_PASSWORD, ...). Names match case-insensitively.
+[shell_environment_policy]
+inherit = "all"
+ignore_default_excludes = false
+
+[shell_environment_policy.filters]
+"*KEY*" = "exclude"
+"*SECRET*" = "exclude"
+"*TOKEN*" = "exclude"
+"*PASSWORD*" = "exclude"
+"*PASSWD*" = "exclude"
+"*CREDENTIAL*" = "exclude"
+
+# Note: there is no deny-read profile for `.env` here. The Claude Code plugin starts every
+# Codex task with its own sandbox mode, which makes Codex ignore [permissions] profiles.
+# The `.env` rules are enforced by the instructions in AGENTS.md and the env filter above.

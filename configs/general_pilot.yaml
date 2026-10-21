@@ -1,0 +1,63 @@
+# DRAFT (not run yet: Rishi reviews the architecture first).
+# The general database agent (text-to-SQL + text-to-Cypher), pilot size: a fixed seeded
+# ~4M-token sample of the four public sets, in the same proportions as general_full.yaml.
+#   ask-trainer train --config configs/general_pilot.yaml [--jepa] --seed 42
+#   ask-trainer train --resume <run>            # after a crash / power cut
+#
+# Tokens (Spark tokenizer, means per example): sqale 2,200 x 922 = 2.03M, text2cypher
+# 2,000 x 647 = 1.29M, gretel 1,450 x 357 = 0.52M, cypherbench 300 x 634 = 0.19M; ~4.0M in
+# all, ~9% of them answer tokens. 5,950 examples / 32 per step = 186 optimizer steps.
+name: general-pilot
+seed: 42
+data:
+  nfl_route: 0           # the NFL track is parked
+  nfl_generate: 0
+  nfl_val: 0
+  public:                # seeded samples of <training>/public/<name>/examples_{train,val}.jsonl
+    sqale: {train: 2200, val: 50}
+    text2cypher: {train: 2000, val: 50}
+    gretel: {train: 1450, val: 50}
+    cypherbench: {train: 300, val: 50}
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  targets: [q_k_v_proj, out_proj, gate_proj, up_proj, down_proj]
+optim:
+  lr: 1.0e-4
+  epochs: 1
+  batch: 1
+  grad_accum: 32
+  warmup: 0.03
+  weight_decay: 0.0
+  max_grad_norm: 1.0
+  max_len: 3072          # the public pool's longest example is 2,992 tokens (p99 <= 2,024)
+  attn_chunk: 1024
+  attn_chunk_above: 3072
+  hipblaslt: true
+  tunableop: false
+  pad_to: 0
+jepa:                    # --jepa turns it on (lambda 2, k 0: the paper's best for 3B-8B)
+  enabled: false
+  lam: 2.0
+  k: 0
+  distance: cosine
+  ratio: 1.0
+eval:
+  every_epoch: true
+  every_steps: 100       # plus the end of the epoch (step 186)
+  public_n: 200          # generated + scored: stratified over the four sets (gretel executed)
+  val_loss_n: -1         # all 200 val examples above
+  max_new_tokens: {route: 96, generate: 512}
+  gen_batch: 8
+  gen_prefill_tokens: 14000
+  val_batch: 2
+  nfl_n: 0
+  nfl_verify: false
+checkpoint:
+  dir: /mnt/f/nfl-ask-trainer-ckpt   # <dir>/<run>/step-NNNNNN/ on the NVMe (folder name: TBC)
+  every_steps: 20
+  keep: 2
+  artifacts: true
+  artifact_name: ask-finetune-adapter
+log_every: 1

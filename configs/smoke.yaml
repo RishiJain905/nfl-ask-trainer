@@ -1,0 +1,37 @@
+# A tiny end-to-end check on the GPU (a few minutes): public data only, 1 epoch of 8 steps,
+# a step evaluation, checkpoints every 3 steps, the public scorer, W&B artifacts.
+#   ask-trainer train --config configs/smoke.yaml [--jepa] [--stop-after 5]
+#   ask-trainer train --resume <run>
+name: smoke
+seed: 7
+data:
+  public:
+    sqale: {train: 8, val: 4}
+    text2cypher: {train: 8, val: 4}
+    gretel: {train: 8, val: 4}
+    cypherbench: {train: 8, val: 4}
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+optim:
+  lr: 1.0e-4
+  epochs: 1
+  batch: 1
+  grad_accum: 4
+  warmup: 1
+  max_len: 3072
+jepa:
+  enabled: false
+  lam: 2.0
+  k: 1
+eval:
+  every_steps: 4
+  public_n: 16
+  max_new_tokens: {route: 96, generate: 512}
+  gen_batch: 8
+  val_batch: 2
+checkpoint:
+  every_steps: 3
+  keep: 2
+log_every: 1

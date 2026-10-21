@@ -1,0 +1,35 @@
+# Environment variables: secrets never go in git
+.env
+.env*
+.env.local
+# The template has variable names only (no values) and should be committed
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Data, models and runs never live in the repo (they are on D:, see README -> Where things live)
+data/
+runs/
+outputs/
+checkpoints/
+*.parquet
+*.jsonl
+*.safetensors
+*.gguf
+*.bin
+*.pt
+wandb/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

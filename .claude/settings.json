@@ -1,0 +1,66 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(**/.env)",
+      "Read(./.env.local)",
+      "Read(**/.env.local)",
+      "Read(**/.env.*.local)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Read(~/.netrc)",
+      "Read(~/_netrc)",
+      "Read(~/.kaggle/**)",
+      "Read(~/.docker/config.json)",
+      "Read(~/.cache/huggingface/token)",
+      "Read(**/huggingface/token)",
+      "Edit(./.env)",
+      "Edit(**/.env)",
+      "Bash(cat .env*)",
+      "Bash(cat ./.env*)",
+      "Bash(type .env*)",
+      "Bash(more .env*)",
+      "Bash(less .env*)",
+      "Bash(head .env*)",
+      "Bash(tail .env*)",
+      "Bash(grep * .env*)",
+      "Bash(sed * .env*)",
+      "Bash(awk * .env*)",
+      "Bash(source .env*)",
+      "Bash(. .env*)",
+      "Bash(env)",
+      "Bash(printenv*)",
+      "Bash(docker compose config*)",
+      "Bash(docker-compose config*)",
+      "Bash(docker inspect*)",
+      "Bash(docker exec * env*)",
+      "Bash(docker exec * printenv*)",
+      "PowerShell(Get-Content *.env*)",
+      "PowerShell(gc *.env*)",
+      "PowerShell(cat *.env*)",
+      "PowerShell(type *.env*)",
+      "PowerShell(Select-String *.env*)",
+      "PowerShell(Get-ChildItem env:*)",
+      "PowerShell(gci env:*)",
+      "PowerShell(dir env:*)",
+      "PowerShell(ls env:*)",
+      "PowerShell(docker compose config*)",
+      "PowerShell(docker inspect*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Read|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/block_secrets.py\"",
+            "timeout": 10,
+            "statusMessage": "Checking for credential access"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,62 @@
+# DRAFT (not run yet: Rishi reviews the architecture first).
+# The general database agent, full size: ~52M tokens, one epoch.
+#   ask-trainer train --config configs/general_full.yaml [--jepa] --seed 42
+#   ask-trainer train --resume <run>            # after a crash / power cut
+#
+# Examples: sqale 30,000 (27.67M tokens), text2cypher 27,084 (all, 17.52M), gretel 20,000
+# (~7.1M), cypherbench 4,000 (~2.5M): 81,084 examples / 32 per step = 2,534 optimizer steps.
+# At ~950 tok/s that is ~15 h of training, plus ~6 evaluations.
+name: general-full
+seed: 42
+data:
+  nfl_route: 0
+  nfl_generate: 0
+  nfl_val: 0
+  public:
+    sqale: {train: 30000, val: 50}
+    text2cypher: {train: -1, val: 50}
+    gretel: {train: 20000, val: 50}
+    cypherbench: {train: 4000, val: 50}
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  targets: [q_k_v_proj, out_proj, gate_proj, up_proj, down_proj]
+optim:
+  lr: 1.0e-4
+  epochs: 1
+  batch: 1
+  grad_accum: 32
+  warmup: 0.03
+  weight_decay: 0.0
+  max_grad_norm: 1.0
+  max_len: 3072
+  attn_chunk: 1024
+  attn_chunk_above: 3072
+  hipblaslt: true
+  tunableop: false
+  pad_to: 0
+jepa:
+  enabled: false
+  lam: 2.0
+  k: 0
+  distance: cosine
+  ratio: 1.0
+eval:
+  every_epoch: true
+  every_steps: 500
+  public_n: 200
+  val_loss_n: -1
+  max_new_tokens: {route: 96, generate: 512}
+  gen_batch: 8
+  gen_prefill_tokens: 14000
+  val_batch: 2
+  nfl_n: 0
+  nfl_verify: false
+checkpoint:
+  dir: /mnt/f/nfl-ask-trainer-ckpt
+  every_steps: 20
+  keep: 2
+  artifacts: true
+  artifact_name: ask-finetune-adapter
+log_every: 1

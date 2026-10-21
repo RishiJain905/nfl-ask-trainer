@@ -1,0 +1,47 @@
+[project]
+name = "nfl-ask-trainer"
+version = "0.1.0"
+description = "The SFT environment for the NFL Analytics Engine's local Ask model (AE04): training data mixing, LoRA fine-tuning with and without LLM-JEPA, evaluation hooks and export."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+# torch and triton are NOT listed: they come from AMD's ROCm wheels (scripts/setup_wsl.sh),
+# and every package below accepts the installed torch 2.9.1+rocm7.2.
+dependencies = [
+  "transformers==4.57.1",  # the version Spark-X2.6-4B's model card pins (trust_remote_code)
+  "peft>=0.17",
+  "trl>=0.24",
+  "accelerate>=1.10",
+  "datasets>=4.0",
+  "huggingface_hub>=0.34,<1.0",
+  "wandb>=0.22",
+  "pydantic>=2.11",
+  "pydantic-settings>=2.10",
+  "pyyaml>=6.0",
+  "pyarrow>=20",
+  "numpy>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.13"]
+
+[project.scripts]
+ask-trainer = "asktrainer.cli:main"
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["gpu: needs the ROCm GPU and the base model (deselect with -m 'not gpu')"]
+addopts = "-m 'not gpu'"

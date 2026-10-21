@@ -1,0 +1,18 @@
+# Where things live, as WSL sees them (the trainer runs inside WSL Ubuntu).
+# No secrets here. Windows equivalents: /mnt/d/... = D:\..., /mnt/f/... = F:\...
+
+data_root: /mnt/d/nfl-ml-data          # the NFL repo's NFL_DATA_ROOT (D:\nfl-ml-data)
+training_dir: ask/training              # under data_root: NFL exports, public datasets, mixes
+runs_dir: ask/finetune                  # under data_root: one folder per run (adapters, preds)
+# bf16 safetensors. The canonical copy is D:\LOCAL-Models\XHToken\Spark-X2.6-4B; training reads
+# this copy on F: (NVMe): D: is a USB HDD and a load from it took 200-340 s (Rishi allowed F:
+# "if for faster training", 2026-10-20). Both copies match Hugging Face's sha256 per shard.
+base_model: /mnt/f/LOCAL-Models/XHToken/Spark-X2.6-4B
+nfl_repo: /mnt/f/Personal/NFL/NFL-ML-AI # the NFL repo: its verifier scores predictions
+uv_exe: /mnt/c/Users/ytrjx/.local/bin/uv.exe   # Windows uv, called through WSL interop
+
+wandb:
+  entity: models-ontario-tech-university
+  project: nfl-analytics-engine
+  group: ask-finetune
+  job_type: ask-finetune

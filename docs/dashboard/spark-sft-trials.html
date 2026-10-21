@@ -1,0 +1,505 @@
+<title>Spark SFT Trials</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: a status band (run picker, state, progress, tiles) over a two-column grid of chart cards, then tables (evaluations, sample generations, events). One column on phones. */
+:root {
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --ring: rgba(11,11,11,0.10);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+  --good-text: #006300;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300;
+    --good-text: #0ca30c; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300;
+  --good-text: #0ca30c; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--page); color: var(--ink); font-family: var(--sans); font-size: 14px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 20px 48px; }
+.wrap { max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+h1 { font-size: 1.35rem; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+h2 { font-size: 0.95rem; margin: 0; font-weight: 600; }
+.sub { color: var(--ink-2); font-size: 0.86rem; }
+.muted { color: var(--muted); }
+.mono { font-family: var(--mono); }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+.top { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: space-between; }
+.picker { display: flex; gap: 8px; align-items: center; }
+select { font: inherit; background: var(--surface); color: var(--ink); border: 1px solid var(--axis); border-radius: 6px; padding: 5px 8px; max-width: 70vw; }
+.pill { display: inline-flex; gap: 6px; align-items: center; font-size: 0.8rem; font-weight: 600; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--ring); }
+.pill i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { font-family: var(--mono); font-size: 0.76rem; padding: 2px 8px; border-radius: 5px; background: var(--page); border: 1px solid var(--ring); color: var(--ink-2); }
+.progress { height: 8px; background: var(--grid); border-radius: 4px; overflow: hidden; }
+.progress > div { height: 100%; background: var(--s1); border-radius: 0 4px 4px 0; width: 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.tile { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tile .k { font-size: 0.78rem; color: var(--ink-2); }
+.tile .v { font-size: 1.25rem; font-weight: 600; }
+.tile .s { font-size: 0.76rem; color: var(--muted); overflow-wrap: anywhere; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 14px; }
+.chart-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-bottom: 6px; }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.78rem; color: var(--ink-2); }
+.legend span { display: inline-flex; gap: 5px; align-items: center; }
+.legend b { display: inline-block; width: 14px; height: 2px; border-radius: 1px; }
+.chart { position: relative; }
+.chart svg { width: 100%; height: auto; display: block; overflow: visible; }
+.chart svg text { font-family: var(--sans); font-size: 10.5px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.chart svg:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; border-radius: 4px; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--ring); border-radius: 6px; padding: 6px 9px; font-size: 0.78rem; box-shadow: 0 4px 14px rgba(0,0,0,0.12); min-width: 120px; z-index: 2; }
+.tip .t { color: var(--muted); font-size: 0.72rem; margin-bottom: 2px; }
+.tip .r { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.tip .r b { font-variant-numeric: tabular-nums; }
+.tip .r span { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-2); }
+.tip .r i { width: 10px; height: 2px; display: inline-block; }
+.empty-chart { font-size: 0.84rem; color: var(--muted); padding: 30px 0; text-align: center; }
+.note { font-size: 0.76rem; color: var(--muted); margin-top: 4px; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.84rem; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { font-size: 0.74rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.code { font-family: var(--mono); font-size: 0.76rem; white-space: pre-wrap; word-break: break-word; max-width: 46ch; }
+.ok, .bad { display: inline-flex; gap: 4px; align-items: center; font-weight: 600; font-size: 0.78rem; white-space: nowrap; }
+.ok { color: var(--good-text); } .bad { color: var(--critical); }
+.check { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 0.86rem; }
+.empty { text-align: center; padding: 40px 16px; color: var(--ink-2); }
+.empty h2 { font-size: 1.05rem; margin-bottom: 6px; }
+</style>
+
+<div class="wrap">
+  <div class="top">
+    <div>
+      <h1>Spark SFT Trials</h1>
+      <div class="sub">Smoke runs and pilots of the Spark-X2.6-4B database-agent fine-tune, from the runs' own log files</div>
+    </div>
+    <div class="picker">
+      <label for="run-picker" class="sub">Run</label>
+      <select id="run-picker" aria-label="Choose a run"><option>Loading runs…</option></select>
+    </div>
+  </div>
+
+  <div id="empty" class="card empty" hidden>
+    <h2>No runs here yet</h2>
+    <p>Claude adds each smoke or pilot run when it starts, then updates it every few minutes from the run's log files. Nothing on this page is typed in by hand.</p>
+  </div>
+  <div id="nodb" class="card empty" hidden>
+    <h2>The live data isn't available in this view</h2>
+    <p>Open the page on claude.ai while signed in to see the runs.</p>
+  </div>
+
+  <div id="main" hidden style="display:flex;flex-direction:column;gap:18px">
+    <div class="card" style="display:flex;flex-direction:column;gap:12px">
+      <div class="top">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <span id="state" class="pill"><i></i><span>—</span></span>
+          <div id="chips" class="chips"></div>
+        </div>
+        <div class="sub" id="updated">—</div>
+      </div>
+      <div>
+        <div class="progress" role="progressbar" aria-label="Training progress" id="prog" aria-valuemin="0" aria-valuemax="100"><div></div></div>
+        <div class="sub" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:4px">
+          <span id="progtext">—</span><span id="eta">—</span>
+        </div>
+      </div>
+      <div class="tiles" id="tiles"></div>
+    </div>
+
+    <div class="grid">
+      <div class="card"><div class="chart-head"><h2>Training loss on answer tokens</h2><div class="legend" id="lg-ce"></div></div><div class="chart" id="c-ce"></div><div class="note">Smoothed = exponential moving average of the logged loss (weight 0.1), computed on this page.</div></div>
+      <div class="card"><div class="chart-head"><h2>Validation loss by dataset</h2><div class="legend" id="lg-vl"></div></div><div class="chart" id="c-vl"></div></div>
+      <div class="card"><div class="chart-head"><h2>Validation accuracy</h2><div class="legend" id="lg-va"></div></div><div class="chart" id="c-va"></div><div class="note">Executed: the generated query returns exactly the reference rows. Exact: the query text matches after spacing is normalised.</div></div>
+      <div class="card"><div class="chart-head"><h2>Learning rate</h2></div><div class="chart" id="c-lr"></div></div>
+      <div class="card"><div class="chart-head"><h2>Gradient norm before clipping</h2></div><div class="chart" id="c-gn"></div><div class="note">The dashed line is the clip at 1.0.</div></div>
+      <div class="card"><div class="chart-head"><h2>Training speed</h2></div><div class="chart" id="c-tps"></div><div class="note">Tokens per second, per optimizer step, as the trainer measured it.</div></div>
+      <div class="card"><div class="chart-head"><h2>Peak GPU memory per step</h2></div><div class="chart" id="c-pk"></div><div class="note">PyTorch's peak allocation on the RX 7800 XT (16 GB).</div></div>
+      <div class="card"><div class="chart-head"><h2>GPU memory in use, whole card</h2></div><div class="chart" id="c-vram"></div><div class="note">Windows' dedicated-memory counter, every 15 s. Windows doesn't attribute WSL's ROCm work to any GPU engine, so there's no utilisation line.</div></div>
+      <div class="card" id="card-jepa"><div class="chart-head"><h2>LLM-JEPA distance</h2></div><div class="chart" id="c-jepa"></div><div class="note">1 − cosine between the question's and the query's embeddings; JEPA runs only.</div></div>
+      <div class="card"><div class="chart-head"><h2>Where each evaluation's time goes</h2><div class="legend" id="lg-et"></div></div><div class="chart" id="c-et"></div></div>
+    </div>
+
+    <div class="card">
+      <div class="chart-head"><h2>W&amp;B cross-check</h2></div>
+      <div class="check" id="wb">—</div>
+    </div>
+
+    <div class="card">
+      <div class="chart-head"><h2>Evaluations</h2></div>
+      <div class="tablewrap"><table id="t-evals"><thead><tr><th>Step</th><th class="n">Val loss</th><th class="n">Executed / exact</th><th class="n">Valid JSON</th><th class="n">Minutes</th></tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="card">
+      <div class="chart-head"><h2>Latest sample generations</h2><span class="sub" id="samples-step"></span></div>
+      <div class="tablewrap"><table id="t-samples"><thead><tr><th>Set</th><th>Question</th><th>Model output</th><th>Reference</th><th>Result</th></tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="card">
+      <div class="chart-head"><h2>Run events</h2></div>
+      <div class="tablewrap"><table id="t-events"><thead><tr><th>Time (UTC)</th><th class="n">Step</th><th>Event</th><th>Details</th></tr></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var css = function (v) { return "var(" + v + ")"; };
+  var SERIES = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6"];
+  var SET_ORDER = ["all", "sqale", "text2cypher", "gretel", "cypherbench", "nfl", "public"];
+  function el(tag, attrs, text) {
+    var e = document.createElement(tag);
+    if (attrs) for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function sv(tag, attrs) {
+    var e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+  function fmtNum(v, d) {
+    if (v == null || !isFinite(v)) return "—";
+    var a = Math.abs(v);
+    if (a !== 0 && (a < 1e-3)) return v.toExponential(1);
+    if (a >= 1e6) return (v / 1e6).toFixed(a >= 1e7 ? 1 : 2) + "M";
+    if (a >= 1e4) return (v / 1e3).toFixed(1) + "K";
+    return v.toFixed(d == null ? (a >= 100 ? 0 : a >= 10 ? 1 : 3) : d);
+  }
+  function pct(v) { return v == null ? "—" : (v * 100).toFixed(1) + "%"; }
+  function dur(s) {
+    if (s == null) return "—";
+    s = Math.round(s);
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return h ? h + " h " + m + " min" : m ? m + " min" : s + " s";
+  }
+  function ago(iso) {
+    if (!iso) return "—";
+    var s = (Date.now() - Date.parse(iso)) / 1000;
+    if (!isFinite(s)) return "—";
+    if (s < 90) return "just now";
+    return dur(s) + " ago";
+  }
+  function niceTicks(lo, hi, n) {
+    if (lo === hi) { hi = lo + (Math.abs(lo) || 1); }
+    var span = hi - lo, step = Math.pow(10, Math.floor(Math.log10(span / n)));
+    var err = span / n / step;
+    if (err >= 7.5) step *= 10; else if (err >= 3.5) step *= 5; else if (err >= 1.5) step *= 2;
+    var t0 = Math.ceil(lo / step) * step, out = [];
+    for (var t = t0; t <= hi + step * 1e-9; t += step) out.push(+t.toPrecision(12));
+    return { ticks: out, step: step };
+  }
+
+  // ---- line chart: one y-axis, crosshair + tooltip listing every series -----------------------
+  function lineChart(box, legendBox, opts) {
+    box.textContent = "";
+    if (legendBox) legendBox.textContent = "";
+    var series = opts.series.filter(function (s) { return s.data.length; });
+    if (!series.length) { box.appendChild(el("div", { "class": "empty-chart" }, opts.empty || "No data yet")); return; }
+    var W = 600, H = 210, L = 52, R = 16, T = 10, B = 26;
+    var xs = [], ys = [];
+    series.forEach(function (s) { s.data.forEach(function (p) { xs.push(p[0]); ys.push(p[1]); }); });
+    var x0 = Math.min.apply(null, xs), x1 = Math.max.apply(null, xs);
+    if (x0 === x1) { x1 = x0 + 1; }
+    var y0 = opts.yMin != null ? opts.yMin : Math.min.apply(null, ys);
+    var y1 = opts.yMax != null ? opts.yMax : Math.max.apply(null, ys);
+    if (opts.ref != null) { y0 = Math.min(y0, opts.ref); y1 = Math.max(y1, opts.ref); }
+    if (y0 === y1) { y1 = y0 + (Math.abs(y0) || 1) * 0.1; y0 = y0 - (Math.abs(y0) || 1) * 0.1; }
+    var yt = niceTicks(y0, y1, 4);
+    y0 = Math.min(y0, yt.ticks[0]); y1 = Math.max(y1, yt.ticks[yt.ticks.length - 1]);
+    var X = function (v) { return L + (v - x0) / (x1 - x0) * (W - L - R); };
+    var Y = function (v) { return T + (1 - (v - y0) / (y1 - y0)) * (H - T - B); };
+    var svg = sv("svg", { viewBox: "0 0 " + W + " " + H, role: "img", tabindex: "0", "aria-label": opts.label || "chart" });
+    yt.ticks.forEach(function (t) {
+      svg.appendChild(sv("line", { x1: L, x2: W - R, y1: Y(t), y2: Y(t), stroke: css("--grid"), "stroke-width": 1 }));
+      var tx = sv("text", { x: L - 6, y: Y(t) + 3.5, "text-anchor": "end" }); tx.textContent = (opts.yFmt || fmtNum)(t); svg.appendChild(tx);
+    });
+    svg.appendChild(sv("line", { x1: L, x2: W - R, y1: H - B, y2: H - B, stroke: css("--axis"), "stroke-width": 1 }));
+    var xt = opts.xTime ? null : niceTicks(x0, x1, 5);
+    var xticks = opts.xTime ? [x0, x0 + (x1 - x0) / 2, x1] : xt.ticks;
+    xticks.forEach(function (t) {
+      var tx = sv("text", { x: X(t), y: H - 8, "text-anchor": "middle" });
+      tx.textContent = opts.xTime ? new Date(t).toISOString().slice(11, 16) : fmtNum(t, 0); svg.appendChild(tx);
+    });
+    if (opts.ref != null) svg.appendChild(sv("line", { x1: L, x2: W - R, y1: Y(opts.ref), y2: Y(opts.ref), stroke: css("--muted"), "stroke-width": 1, "stroke-dasharray": "4 4" }));
+    series.forEach(function (s) {
+      var d = s.data.map(function (p, i) { return (i ? "L" : "M") + X(p[0]).toFixed(1) + " " + Y(p[1]).toFixed(1); }).join(" ");
+      svg.appendChild(sv("path", { d: d, fill: "none", stroke: css(s.color), "stroke-width": s.width || 2, "stroke-linejoin": "round", "stroke-linecap": "round", opacity: s.opacity || 1 }));
+      if (!s.noDot) {
+        var last = s.data[s.data.length - 1];
+        svg.appendChild(sv("circle", { cx: X(last[0]), cy: Y(last[1]), r: 4, fill: css(s.color), stroke: css("--surface"), "stroke-width": 2 }));
+      }
+    });
+    if (legendBox && series.length > 1) series.forEach(function (s) {
+      var sp = el("span"); var b = el("b"); b.style.background = css(s.color); if (s.opacity) b.style.opacity = s.opacity;
+      sp.appendChild(b); sp.appendChild(document.createTextNode(s.name)); legendBox.appendChild(sp);
+    });
+    // hover layer
+    var cross = sv("line", { y1: T, y2: H - B, stroke: css("--axis"), "stroke-width": 1, visibility: "hidden" });
+    svg.appendChild(cross);
+    var hit = sv("rect", { x: L, y: T, width: W - L - R, height: H - T - B, fill: "transparent" });
+    svg.appendChild(hit);
+    box.appendChild(svg);
+    var tip = el("div", { "class": "tip" }); tip.hidden = true; box.appendChild(tip);
+    var allX = Array.from(new Set(xs)).sort(function (a, b) { return a - b; });
+    var idx = allX.length - 1;
+    function nearest(arr, x) { var best = null, bd = Infinity; arr.forEach(function (p) { var dd = Math.abs(p[0] - x); if (dd < bd) { bd = dd; best = p; } }); return best; }
+    function show(xv) {
+      cross.setAttribute("x1", X(xv)); cross.setAttribute("x2", X(xv)); cross.setAttribute("visibility", "visible");
+      tip.textContent = "";
+      tip.appendChild(el("div", { "class": "t" }, opts.xTime ? new Date(xv).toISOString().replace("T", " ").slice(0, 19) + " UTC" : (opts.xName || "step") + " " + fmtNum(xv, 0)));
+      series.forEach(function (s) {
+        var p = nearest(s.data, xv); if (!p) return;
+        var r = el("div", { "class": "r" }); var nm = el("span"); var i = el("i"); i.style.background = css(s.color);
+        nm.appendChild(i); nm.appendChild(document.createTextNode(s.name)); r.appendChild(nm); r.appendChild(el("b", null, (opts.yFmt || fmtNum)(p[1]))); tip.appendChild(r);
+      });
+      tip.hidden = false;
+      var bw = box.clientWidth, px = X(xv) / W * bw;
+      tip.style.left = Math.min(Math.max(px + 12, 0), bw - tip.offsetWidth - 4) + "px"; tip.style.top = "6px";
+    }
+    function hide() { cross.setAttribute("visibility", "hidden"); tip.hidden = true; }
+    hit.addEventListener("pointermove", function (e) {
+      var r = svg.getBoundingClientRect(); var xv = x0 + ((e.clientX - r.left) / r.width * W - L) / (W - L - R) * (x1 - x0);
+      var n = nearest(allX.map(function (v) { return [v]; }), xv); if (n) { idx = allX.indexOf(n[0]); show(n[0]); }
+    });
+    hit.addEventListener("pointerleave", hide);
+    svg.addEventListener("focus", function () { show(allX[idx]); });
+    svg.addEventListener("blur", hide);
+    svg.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowLeft") { idx = Math.max(0, idx - 1); show(allX[idx]); e.preventDefault(); }
+      if (e.key === "ArrowRight") { idx = Math.min(allX.length - 1, idx + 1); show(allX[idx]); e.preventDefault(); }
+    });
+  }
+
+  // ---- stacked columns: evaluation time per evaluation ---------------------------------------
+  function stackedBars(box, legendBox, rows, parts) {
+    box.textContent = ""; legendBox.textContent = "";
+    if (!rows.length) { box.appendChild(el("div", { "class": "empty-chart" }, "No evaluations yet")); return; }
+    var W = 600, H = 210, L = 52, R = 16, T = 10, B = 26;
+    var tot = rows.map(function (r) { return parts.reduce(function (a, p) { return a + (r[p.key] || 0); }, 0); });
+    var yt = niceTicks(0, Math.max.apply(null, tot), 4), y1 = yt.ticks[yt.ticks.length - 1];
+    var Y = function (v) { return T + (1 - v / y1) * (H - T - B); };
+    var svg = sv("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Evaluation time per evaluation, stacked by part" });
+    yt.ticks.forEach(function (t) {
+      svg.appendChild(sv("line", { x1: L, x2: W - R, y1: Y(t), y2: Y(t), stroke: css("--grid"), "stroke-width": 1 }));
+      var tx = sv("text", { x: L - 6, y: Y(t) + 3.5, "text-anchor": "end" }); tx.textContent = fmtNum(t / 60, 1) + " min"; svg.appendChild(tx);
+    });
+    var band = (W - L - R) / rows.length, bw = Math.min(24, band * 0.6);
+    var tip = el("div", { "class": "tip" }); tip.hidden = true;
+    rows.forEach(function (r, i) {
+      var cx = L + band * (i + 0.5), acc = 0, g = sv("g", { tabindex: "0" });
+      parts.forEach(function (p, j) {
+        var v = r[p.key] || 0; if (!v) return;
+        var yTop = Y(acc + v), yBot = Y(acc), h = Math.max(0, yBot - yTop - (acc ? 2 : 0));
+        var isTop = j === parts.length - 1 || parts.slice(j + 1).every(function (q) { return !(r[q.key]); });
+        g.appendChild(sv("rect", { x: cx - bw / 2, y: yTop, width: bw, height: h, rx: isTop ? 4 : 0, fill: css(p.color) }));
+        acc += v;
+      });
+      var tx = sv("text", { x: cx, y: H - 8, "text-anchor": "middle" }); tx.textContent = String(r.step); svg.appendChild(tx);
+      var hitR = sv("rect", { x: cx - band / 2, y: T, width: band, height: H - T - B, fill: "transparent" });
+      g.appendChild(hitR);
+      function on() {
+        tip.textContent = ""; tip.appendChild(el("div", { "class": "t" }, "evaluation at step " + r.step));
+        parts.forEach(function (p) { var rr = el("div", { "class": "r" }); var nm = el("span"); var ii = el("i"); ii.style.background = css(p.color); nm.appendChild(ii); nm.appendChild(document.createTextNode(p.name)); rr.appendChild(nm); rr.appendChild(el("b", null, dur(r[p.key] || 0))); tip.appendChild(rr); });
+        tip.hidden = false; var bwid = box.clientWidth; tip.style.left = Math.min(cx / W * bwid + 10, bwid - tip.offsetWidth - 4) + "px"; tip.style.top = "6px";
+      }
+      g.addEventListener("pointerenter", on); g.addEventListener("focus", on);
+      g.addEventListener("pointerleave", function () { tip.hidden = true; }); g.addEventListener("blur", function () { tip.hidden = true; });
+      svg.appendChild(g);
+    });
+    svg.appendChild(sv("line", { x1: L, x2: W - R, y1: H - B, y2: H - B, stroke: css("--axis"), "stroke-width": 1 }));
+    box.appendChild(svg); box.appendChild(tip);
+    parts.forEach(function (p) { var sp = el("span"); var b = el("b"); b.style.background = css(p.color); b.style.height = "8px"; b.style.width = "8px"; sp.appendChild(b); sp.appendChild(document.createTextNode(p.name)); legendBox.appendChild(sp); });
+  }
+
+  // ---- merging the ticks ------------------------------------------------------------------------
+  function merge(ticks) {
+    var m = { points: {}, evals: {}, events: [], gpu: {}, status: null, wandb: null, cols: null, seen: {} };
+    ticks.forEach(function (t) {
+      var cols = t.cols || m.cols; m.cols = cols;
+      (t.points || []).forEach(function (row) {
+        var o = {}; cols.forEach(function (c, i) { o[c] = row[i]; });
+        if (o.step != null) m.points[o.step] = o;
+      });
+      (t.evals || []).forEach(function (e) { if (e.step != null) m.evals[e.step] = e; });
+      (t.events || []).forEach(function (e) { var k = (e.ts || "") + "|" + e.kind + "|" + (e.step == null ? "" : e.step); if (!m.seen[k]) { m.seen[k] = 1; m.events.push(e); } });
+      (t.gpu || []).forEach(function (g) { m.gpu[g[0]] = g; });
+      if (t.status) m.status = t.status;
+      if (t.wandb_check) m.wandb = t.wandb_check;
+    });
+    m.pts = Object.keys(m.points).map(Number).sort(function (a, b) { return a - b; }).map(function (k) { return m.points[k]; });
+    m.ev = Object.keys(m.evals).map(Number).sort(function (a, b) { return a - b; }).map(function (k) { return m.evals[k]; });
+    m.gp = Object.keys(m.gpu).sort().map(function (k) { return m.gpu[k]; });
+    return m;
+  }
+  function ser(pts, key) { return pts.filter(function (p) { return p[key] != null; }).map(function (p) { return [p.step, p[key]]; }); }
+  function ema(data, a) { var out = [], v = null; data.forEach(function (p) { v = v == null ? p[1] : a * p[1] + (1 - a) * v; out.push([p[0], v]); }); return out; }
+  function setsIn(evs, suffix) {
+    var found = {};
+    evs.forEach(function (e) { Object.keys(e.metrics || {}).forEach(function (k) { var m = k.match(new RegExp("^val/(?:public/)?([a-z0-9_]+)/" + suffix + "$")); if (m && SET_ORDER.indexOf(m[1]) >= 0) found[m[1]] = 1; }); });
+    return SET_ORDER.filter(function (s) { return found[s]; });
+  }
+
+  var STATE = {
+    running: { label: "Running", color: "--good" }, done: { label: "Finished", color: "--good" },
+    stalled: { label: "Stalled: no step for 20 min", color: "--warning" }, stopped: { label: "Stopped", color: "--critical" },
+    waiting: { label: "Not started", color: "--muted" }
+  };
+
+  function render(meta, ticks) {
+    var m = merge(ticks), st = m.status || {}, info = (meta && meta.info) || {};
+    var s = STATE[st.state] || STATE.waiting;
+    var pill = document.getElementById("state");
+    pill.querySelector("i").style.background = css(s.color); pill.querySelector("span").textContent = s.label;
+    var chips = document.getElementById("chips"); chips.textContent = "";
+    [info.objective || (meta && meta.config && meta.config.jepa && meta.config.jepa.enabled ? "jepa" : "plain"),
+     info.seed != null ? "seed " + info.seed : null,
+     meta && meta.config && meta.config.optim ? "lr " + meta.config.optim.lr : null,
+     meta && meta.config && meta.config.lora ? "rank " + meta.config.lora.r : null,
+     info.effective_batch ? "batch " + info.effective_batch : null].filter(Boolean).forEach(function (c) { chips.appendChild(el("span", { "class": "chip" }, String(c))); });
+    document.getElementById("updated").textContent = "Updated " + ago(st.updated_at) + (st.last_step_at ? " · last step " + ago(st.last_step_at) : "");
+    var planned = st.planned_steps || (m.pts.length ? null : null);
+    var prog = document.getElementById("prog"), frac = planned ? Math.min(1, (st.step || 0) / planned) : (st.state === "done" ? 1 : 0);
+    prog.firstElementChild.style.width = (frac * 100).toFixed(1) + "%"; prog.setAttribute("aria-valuenow", Math.round(frac * 100));
+    document.getElementById("progtext").textContent = "Step " + (st.step || 0) + (planned ? " of " + planned : "") + (st.tokens_seen ? " · " + fmtNum(st.tokens_seen) + " tokens" + (st.planned_tokens ? " of " + fmtNum(st.planned_tokens) : "") : "");
+    document.getElementById("eta").textContent = st.state === "done" ? "Finished" : st.eta_s != null ? "About " + dur(st.eta_s) + " left (estimate from recent step times)" : "";
+    var lastEval = m.ev.length ? m.ev[m.ev.length - 1] : null, lm = lastEval ? lastEval.metrics : {};
+    var ce = ser(m.pts, "ce"), smooth = ema(ce, 0.1);
+    var tiles = [
+      ["Training loss", smooth.length ? fmtNum(smooth[smooth.length - 1][1]) : "—", "smoothed; last logged " + fmtNum(st.ce_last)],
+      ["Learning rate", st.lr_last != null ? st.lr_last.toExponential(2) : "—", "at the last step"],
+      ["Speed", st.tok_s_recent != null ? fmtNum(st.tok_s_recent, 0) + " tok/s" : "—", "median of the last 10 steps"],
+      ["Peak GPU memory", st.peak_gb != null ? st.peak_gb.toFixed(1) + " GB" : "—", "of 16 GB"],
+      ["Last checkpoint", st.last_checkpoint ? "step " + st.last_checkpoint.step : "—", st.last_checkpoint ? ago(st.last_checkpoint.ts) : "none yet"],
+      ["Last evaluation", lastEval ? (lm["val/public/exec_acc"] != null ? pct(lm["val/public/exec_acc"]) : lm["val/exec_acc"] != null ? pct(lm["val/exec_acc"]) : fmtNum(lm["val/loss"])) : "—", lastEval ? "step " + lastEval.step + (lm["val/public/exec_acc"] != null || lm["val/exec_acc"] != null ? " · executed correctly" : " · val loss") : "none yet"]
+    ];
+    var tb = document.getElementById("tiles"); tb.textContent = "";
+    tiles.forEach(function (t) { var d = el("div", { "class": "tile" }); d.appendChild(el("span", { "class": "k" }, t[0])); d.appendChild(el("span", { "class": "v" }, t[1])); d.appendChild(el("span", { "class": "s" }, t[2])); tb.appendChild(d); });
+
+    lineChart(document.getElementById("c-ce"), document.getElementById("lg-ce"), { label: "Training loss per step", series: [
+      { name: "logged", color: "--s1", data: ce, width: 1.4, opacity: 0.35, noDot: true }, { name: "smoothed", color: "--s1", data: smooth }] });
+    var vsets = setsIn(m.ev, "loss"); var vl = [{ name: "all", color: "--s6", data: m.ev.filter(function (e) { return e.metrics["val/loss"] != null; }).map(function (e) { return [e.step, e.metrics["val/loss"]]; }) }];
+    vsets.forEach(function (sname, i) { vl.push({ name: sname, color: SERIES[i % 5], data: m.ev.filter(function (e) { return e.metrics["val/loss/" + sname] != null; }).map(function (e) { return [e.step, e.metrics["val/loss/" + sname]]; }) }); });
+    lineChart(document.getElementById("c-vl"), document.getElementById("lg-vl"), { label: "Validation loss by dataset", series: vl, empty: "No evaluations yet" });
+    var acc = [];
+    var overall = m.ev.filter(function (e) { return e.metrics["val/public/exec_acc"] != null || e.metrics["val/exec_acc"] != null; }).map(function (e) { var v = e.metrics["val/public/exec_acc"]; return [e.step, v != null ? v : e.metrics["val/exec_acc"]]; });
+    if (overall.length) acc.push({ name: "executed, all", color: "--s6", data: overall });
+    setsIn(m.ev, "exec_acc").forEach(function (sname, i) { acc.push({ name: sname + " executed", color: SERIES[i % 5], data: m.ev.filter(function (e) { return e.metrics["val/" + sname + "/exec_acc"] != null || e.metrics["val/public/" + sname + "/exec_acc"] != null; }).map(function (e) { var v = e.metrics["val/" + sname + "/exec_acc"]; return [e.step, v != null ? v : e.metrics["val/public/" + sname + "/exec_acc"]]; }) }); });
+    setsIn(m.ev, "exact").forEach(function (sname, i) { acc.push({ name: sname + " exact", color: SERIES[(i + 2) % 5], data: m.ev.filter(function (e) { return e.metrics["val/" + sname + "/exact"] != null; }).map(function (e) { return [e.step, e.metrics["val/" + sname + "/exact"]]; }) }); });
+    lineChart(document.getElementById("c-va"), document.getElementById("lg-va"), { label: "Validation accuracy", series: acc, yMin: 0, yMax: 1, yFmt: function (v) { return (v * 100).toFixed(0) + "%"; }, empty: "No evaluations yet" });
+    lineChart(document.getElementById("c-lr"), null, { label: "Learning rate per step", series: [{ name: "learning rate", color: "--s1", data: ser(m.pts, "lr") }], yMin: 0, yFmt: function (v) { return v === 0 ? "0" : v.toExponential(1); } });
+    lineChart(document.getElementById("c-gn"), null, { label: "Gradient norm per step", series: [{ name: "gradient norm", color: "--s1", data: ser(m.pts, "grad_norm") }], yMin: 0, ref: 1 });
+    lineChart(document.getElementById("c-tps"), null, { label: "Tokens per second per step", series: [{ name: "tokens/s", color: "--s1", data: ser(m.pts, "tok_s") }], yMin: 0 });
+    lineChart(document.getElementById("c-pk"), null, { label: "Peak GPU memory per step", series: [{ name: "peak GB", color: "--s1", data: ser(m.pts, "peak_gb") }], yMin: 0, yMax: 16, yFmt: function (v) { return v.toFixed(0) + " GB"; } });
+    lineChart(document.getElementById("c-vram"), null, { label: "GPU memory in use over time", xTime: true, series: [{ name: "GPU memory", color: "--s1", data: m.gp.filter(function (g) { return g[2] != null; }).map(function (g) { return [Date.parse(g[0]), g[2]]; }) }], yMin: 0, yMax: 16, yFmt: function (v) { return v.toFixed(0) + " GB"; }, empty: "No monitor samples for this run" });
+    var jp = ser(m.pts, "jepa");
+    document.getElementById("card-jepa").hidden = !jp.length;
+    if (jp.length) lineChart(document.getElementById("c-jepa"), null, { label: "JEPA distance per step", series: [{ name: "JEPA distance", color: "--s1", data: jp }], yMin: 0 });
+    stackedBars(document.getElementById("c-et"), document.getElementById("lg-et"), m.ev.map(function (e) { return { step: e.step, loss: e.metrics["val/loss_s"], gen: e.metrics["val/generate_s"], ver: e.metrics["val/verify_s"] || e.metrics["val/public_s"] }; }),
+      [{ key: "loss", name: "validation loss", color: "--s1" }, { key: "gen", name: "generation", color: "--s2" }, { key: "ver", name: "scoring", color: "--s3" }]);
+
+    var wb = document.getElementById("wb"); wb.textContent = "";
+    if (!m.wandb) wb.appendChild(el("span", { "class": "muted" }, "Not checked yet."));
+    else if (m.wandb.error) wb.appendChild(el("span", { "class": "bad" }, "Couldn't read W&B (" + m.wandb.error + ")"));
+    else {
+      wb.appendChild(el("span", { "class": m.wandb.ok ? "ok" : "bad" }, m.wandb.ok ? "✓ Matches" : "✗ Differs"));
+      wb.appendChild(el("span", null, m.wandb.compared + " logged steps compared with W&B's stored train/ce, largest difference " + (m.wandb.max_abs_diff == null ? "—" : m.wandb.max_abs_diff.toExponential(1)) + (m.wandb.missing_in_wandb ? "; " + m.wandb.missing_in_wandb + " step(s) only in the local log (W&B drops steps re-logged after a resume)" : "") + "."));
+      wb.appendChild(el("span", { "class": "muted" }, "checked " + ago(m.wandb.checked_at)));
+    }
+    var te = document.querySelector("#t-evals tbody"); te.textContent = "";
+    m.ev.slice().reverse().forEach(function (e) {
+      var mt = e.metrics, tr = el("tr");
+      var ex = mt["val/public/exec_acc"] != null ? mt["val/public/exec_acc"] : mt["val/exec_acc"];
+      var exact = mt["val/public/exact"];
+      [String(e.step), fmtNum(mt["val/loss"]), (ex != null ? pct(ex) : "—") + (exact != null ? " / " + pct(exact) : ""), pct(mt["val/public/json_ok"] != null ? mt["val/public/json_ok"] : mt["val/json_ok"]),
+       fmtNum(((mt["val/loss_s"] || 0) + (mt["val/generate_s"] || 0) + (mt["val/verify_s"] || mt["val/public_s"] || 0)) / 60, 1)].forEach(function (v, i) { tr.appendChild(el("td", i ? { "class": "n" } : null, v)); });
+      te.appendChild(tr);
+    });
+    var ts = document.querySelector("#t-samples tbody"); ts.textContent = "";
+    var withS = m.ev.filter(function (e) { return e.samples && e.samples.length; }), le = withS[withS.length - 1];
+    document.getElementById("samples-step").textContent = le ? "evaluation at step " + le.step : "none yet";
+    (le ? le.samples : []).forEach(function (sm) {
+      var tr = el("tr");
+      tr.appendChild(el("td", null, sm.set || sm.group || sm.origin || "—"));
+      tr.appendChild(el("td", null, sm.question || sm.text || "—"));
+      tr.appendChild(el("td", { "class": "code" }, sm.output || "—"));
+      tr.appendChild(el("td", { "class": "code" }, sm.gold || sm.target || "—"));
+      // say what was actually checked: executed rows, else exact text, else syntax / JSON
+      var verdict, cls;
+      var b = function (v) { return v === true || v === "True" ? true : v === false || v === "False" ? false : null; };
+      if (b(sm.json_ok) === false) { verdict = "✗ not JSON"; cls = "bad"; }
+      else if (b(sm.exec_ok) != null) { verdict = b(sm.exec_ok) ? "✓ right rows" : "✗ wrong rows"; cls = b(sm.exec_ok) ? "ok" : "bad"; }
+      else if (b(sm.exact) === true) { verdict = "✓ exact match"; cls = "ok"; }
+      else if (b(sm.parse_ok) === false) { verdict = "✗ invalid query"; cls = "bad"; }
+      else if (b(sm.exact) === false) { verdict = "valid, differs from reference"; cls = "muted"; }
+      else { verdict = b(sm.ok) ? "✓ right" : "✗ wrong"; cls = b(sm.ok) ? "ok" : "bad"; }
+      if (sm.reason && sm.reason !== "ok" && cls === "bad") verdict += " (" + sm.reason + ")";
+      var res = el("td"); res.appendChild(el("span", { "class": cls }, verdict)); tr.appendChild(res);
+      ts.appendChild(tr);
+    });
+    var tv = document.querySelector("#t-events tbody"); tv.textContent = "";
+    m.events.slice(-40).reverse().forEach(function (e) {
+      var tr = el("tr"); tr.appendChild(el("td", null, (e.ts || "").replace("T", " ").slice(0, 19)));
+      tr.appendChild(el("td", { "class": "n" }, e.step == null ? "" : String(e.step)));
+      tr.appendChild(el("td", null, e.kind || ""));
+      var det = Object.keys(e).filter(function (k) { return ["ts", "kind", "step"].indexOf(k) < 0; }).map(function (k) { var v = e[k]; return k + " " + (typeof v === "number" ? fmtNum(v) : typeof v === "object" ? JSON.stringify(v) : String(v)); }).join(" · ");
+      tr.appendChild(el("td", null, det)); tv.appendChild(tr);
+    });
+    if (!m.events.length) { var tr0 = el("tr"); var td0 = el("td", { colspan: "4", "class": "muted" }, "This run predates the event log."); tr0.appendChild(td0); tv.appendChild(tr0); }
+  }
+
+  // ---- data ------------------------------------------------------------------------------------
+  var runs = {}, current = null, unsubTicks = null, raf = 0, latest = { meta: null, ticks: [] };
+  function schedule() { cancelAnimationFrame(raf); raf = requestAnimationFrame(function () { render(latest.meta, latest.ticks); }); }
+  function pick(name, db) {
+    if (current === name) return;
+    current = name;
+    try { localStorage.setItem("sft-trials-run", name); } catch (e) {}
+    if (unsubTicks) unsubTicks();
+    latest = { meta: runs[name] || null, ticks: [] };
+    unsubTicks = db.collection("runs/" + name + "/ticks").orderBy("seq").limit(1000).onSnapshot(function (snap) {
+      latest.ticks = snap.docs.map(function (d) { return d.data(); });
+      latest.meta = runs[name] || latest.meta; schedule();
+    }, function () {});
+  }
+  async function start() {
+    var db = null;
+    try { db = await window.claude.use("db"); } catch (e) { db = null; }
+    if (!db) { document.getElementById("nodb").hidden = false; document.getElementById("run-picker").disabled = true; return; }
+    var picker = document.getElementById("run-picker");
+    picker.addEventListener("change", function () { pick(picker.value, db); });
+    db.collection("runs").onSnapshot(function (snap) {
+      runs = {}; snap.docs.forEach(function (d) { runs[d.id] = d.data(); });
+      var names = Object.keys(runs).sort(function (a, b) { return String(runs[b].started_at || runs[b].created_at || "").localeCompare(String(runs[a].started_at || runs[a].created_at || "")); });
+      document.getElementById("empty").hidden = names.length > 0;
+      document.getElementById("main").hidden = names.length === 0;
+      picker.textContent = "";
+      names.forEach(function (n) { var o = el("option", { value: n }, n + (runs[n].info && runs[n].info.objective ? " · " + runs[n].info.objective : "")); picker.appendChild(o); });
+      if (!names.length) return;
+      var saved = null; try { saved = localStorage.getItem("sft-trials-run"); } catch (e) {}
+      var want = current && runs[current] ? current : (saved && runs[saved] ? saved : names[0]);
+      picker.value = want; current = null; pick(want, db);
+    }, function () { document.getElementById("nodb").hidden = false; });
+  }
+  if (window.claude && window.claude.use) start(); else document.getElementById("nodb").hidden = false;
+  setInterval(function () { if (latest.ticks.length) schedule(); }, 60000);
+})();
+</script>

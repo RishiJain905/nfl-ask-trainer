@@ -1,0 +1,48 @@
+# PARKED (2026-10-20: the target is now a general database agent; see general_*.yaml).
+# Plain LoRA SFT of Spark-X2.6-4B as Ask's local NFL router / query writer (AE04).
+# ask-trainer train --config configs/nfl_sft_plain.yaml --seed 42
+name: ask
+seed: 42
+data:
+  nfl: latest            # <training>/nfl/LATEST (the NFL repo's `nfl ask train-data`)
+  # ~2.9M training tokens per epoch (Spark tokenizer): NFL ~2.45M (route 650 x ~2.5k,
+  # generate 230 x ~3.5k), public ~0.45M (~15%); the same seeded sample for every run
+  nfl_route: 650
+  nfl_generate: 230
+  nfl_max_tokens: 5300   # every NFL example fits (max 5,178)
+  nfl_val: -1            # all 384 (val loss; 160 of them are generated + verified)
+  public:                # seeded samples from <training>/public/<name>/examples_{train,val}.jsonl
+    sqale: {train: 250, val: 40}
+    gretel: {train: 120, val: 40}        # its golds are noisy
+    text2cypher: {train: 220, val: 40}
+    cypherbench: {train: 60, val: 40}    # 4 graphs, template-made: down-weighted
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  targets: [q_k_v_proj, out_proj, gate_proj, up_proj, down_proj]
+optim:
+  lr: 1.0e-4
+  epochs: 2
+  batch: 1
+  grad_accum: 16
+  warmup: 0.03
+  weight_decay: 0.0
+  max_grad_norm: 1.0
+  max_len: 5300
+  attn_chunk: 1024       # chunked eager attention above 3,072 tokens (fits 5k on 16 GB)
+  attn_chunk_above: 3072
+  hipblaslt: true        # measured: +23% at 2k tokens, no tuning cost
+  tunableop: false       # +8% more, but tunes each new shape (needs pad_to: 256)
+  pad_to: 0
+jepa:
+  enabled: false
+eval:
+  nfl_n: 160            # NFL val generated + scored by `nfl ask verify`
+  public_n: 160
+  max_new_tokens: {route: 96, generate: 512}   # generate targets reach ~490 tokens
+  gen_batch: 8
+  gen_prefill_tokens: 14000
+  val_batch: 2
+  val_loss_n: -1
+  nfl_verify: true
