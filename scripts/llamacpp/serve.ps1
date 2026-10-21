@@ -10,7 +10,7 @@ param([switch]$Stop, [int]$Port = 8090, [int]$Parallel = 16, [int]$Ctx = 65536,
       [string]$Bin = 'F:\Personal\TQ-Optimizer-Test\atomic-llama-cpp-turboquant-spark\build-rdna3-gfx1101\bin',
       [string]$Extra = '')  # e.g. -Extra "-ctk q8_0 -ctv turbo4"
 $ErrorActionPreference = 'Stop'
-$logs = 'F:\nfl-ask-trainer-data\ask\llamacpp'
+$logs = 'D:\nfl-ml-data\ask\llamacpp'
 $pidFile = "$logs\server-$Port.pid"
 New-Item -ItemType Directory -Force $logs | Out-Null
 

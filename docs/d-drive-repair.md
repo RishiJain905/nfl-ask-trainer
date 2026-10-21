@@ -33,3 +33,16 @@ repair. Trace generation runs on Windows from F: and keeps going.
 
 The trainer's data stays on F: (`configs/paths.yaml`) until D: is healthy again; then it is copied
 back and the paths reverted.
+
+## Outcome (2026-10-21, 12:40-13:40)
+
+- A non-elevated `chkdsk D: /f` could lock the USB volume and fixed it; a second read-only
+  `chkdsk D:` then reported "found no problems" (0 KB in bad sectors). `Get-Volume` shows
+  Healthy / OK.
+- WSL Ubuntu: `wsl --terminate Ubuntu` restarted the WSL VM (which also stopped docker-desktop and
+  EXL3-Runtime); the root ext4 replayed its journal ("recovery complete") and mounted read/write
+  with no errors; torch + ROCm see the GPU.
+- Docker: `docker desktop restart`, then `docker start asktrainer-neo4j nfl-neo4j-history`
+  (nfl-neo4j restarts by itself); all three answer on 7474 / 7475 / 7476.
+- The trainer's data went back to D: (`configs/paths.yaml` reverted); the trace run resumed there
+  from its 11,971 answers. About 10 answers written at 11:57 were lost and were generated again.

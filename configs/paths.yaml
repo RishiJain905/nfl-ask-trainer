@@ -1,9 +1,7 @@
 # Where things live, as WSL sees them (the trainer runs inside WSL Ubuntu).
 # No secrets here. Windows equivalents: /mnt/d/... = D:\..., /mnt/f/... = F:\...
 
-# F: (NVMe) since 2026-10-21: D: (the USB drive) reported "Full Repair Needed" after a lost
-# write. The NFL repo keeps D:\nfl-ml-data; this trainer's data moves back once D: is repaired.
-data_root: /mnt/f/nfl-ask-trainer-data
+data_root: /mnt/d/nfl-ml-data          # the NFL repo's NFL_DATA_ROOT (D:\nfl-ml-data)
 training_dir: ask/training              # under data_root: NFL exports, public datasets, mixes
 runs_dir: ask/finetune                  # under data_root: one folder per run (adapters, preds)
 # bf16 safetensors. The canonical copy is D:\LOCAL-Models\XHToken\Spark-X2.6-4B; training reads
