@@ -8,7 +8,7 @@ param([Parameter(Mandatory)][string]$Run, [string]$Url = 'http://127.0.0.1:8090'
       [string]$Python = 'C:\Python314\python.exe')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-$runDir = "D:\nfl-ml-data\ask\traces\$Run"
+$runDir = "F:\nfl-ask-trainer-data\ask\traces\$Run"
 if (-not (Test-Path "$runDir\questions.jsonl")) { Write-Output "no questions in $runDir (run traces prep first)"; exit 1 }
 $env:PYTHONPATH = "$repo\src"
 $p = Start-Process -FilePath $Python -ArgumentList @('-m', 'asktrainer.tracegen', '--run', $runDir, '--url', $Url, '--workers', "$Workers") `

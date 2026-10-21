@@ -3,7 +3,7 @@
 #   bash scripts/dashboard_feed.sh smoke-5 gsmoke-1 -- --wandb
 set -euo pipefail
 cd "$(dirname "$0")/.."
-ROOT=/mnt/d/nfl-ml-data/ask/finetune
+ROOT=/mnt/f/nfl-ask-trainer-data/ask/finetune
 runs=()
 while [ $# -gt 0 ] && [ "$1" != "--" ]; do runs+=("$1"); shift; done
 [ "${1:-}" = "--" ] && shift

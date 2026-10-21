@@ -33,8 +33,8 @@ sys.path.insert(0, str(REPO / "src"))
 
 from asktrainer import llamaeval  # noqa: E402
 
-DATA = Path(r"D:\nfl-ml-data\ask")
-WSL_DATA = "/mnt/d/nfl-ml-data/ask"
+DATA = Path(r"F:\nfl-ask-trainer-data\ask")
+WSL_DATA = "/mnt/f/nfl-ask-trainer-data/ask"
 WSL_REPO = "/mnt/f/Personal/NFL/nfl-ask-trainer"
 FORK = "/mnt/f/Personal/TQ-Optimizer-Test/atomic-llama-cpp-turboquant-spark"
 BASE_HF = "/mnt/f/LOCAL-Models/XHToken/Spark-X2.6-4B"
