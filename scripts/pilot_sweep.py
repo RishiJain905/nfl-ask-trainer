@@ -381,7 +381,18 @@ def _env() -> dict:
     return dict(os.environ)
 
 
+def keep_awake() -> None:
+    """Ask Windows not to idle-sleep while this process runs (released when it exits; no
+    setting changes): a sleep would stop training and the servers mid-run."""
+    if sys.platform == "win32":
+        import ctypes
+
+        es_continuous, es_system_required = 0x80000000, 0x00000001
+        ctypes.windll.kernel32.SetThreadExecutionState(es_continuous | es_system_required)
+
+
 def main() -> int:
+    keep_awake()
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--traces", default="pilot")
     ap.add_argument("--only", default=None, help="run only these pilots, e.g. P1,P2")
