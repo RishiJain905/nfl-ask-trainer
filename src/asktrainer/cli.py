@@ -200,8 +200,12 @@ def evalrun_cmd(args) -> int:
 
     paths = get_paths()
     run = resolve_run(args.run, paths) if args.run else None
-    exs = read_jsonl(
-        Path(args.examples) if args.examples else paths.public / "evalset" / "examples_val.jsonl"
+    exs = list(
+        read_jsonl(
+            Path(args.examples)
+            if args.examples
+            else paths.public / "evalset" / "examples_val.jsonl"
+        )
     )
     preds = [
         json.loads(x)
