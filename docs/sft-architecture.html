@@ -336,7 +336,8 @@ Planned (thinking on, Spark's own tool-call format):
 
 <section aria-labelledby="pilots">
   <h2 id="pilots"><span class="n">08</span>The pilot sweep</h2>
-  <p>Eight runs on the same fixed sample (5,950 traced examples in the full run's proportions, 186 steps; ~4.0M tokens before traces), each changing one thing. Validation loss every 50 steps, a scored evaluation every 100 and at the end. Before traces each run took ~1.4 h, ~11 h in all; the traced pilot is re-timed once its token count is known.</p>
+  <p>Eight runs on the same traced data, each changing one thing: the passing answers of the pilot trace run (15,000 training questions; a kept example averages ~890 tokens, so ~4-5M tokens and ~140 steps at batch 32). Validation loss every 25 steps on held-out traced questions. The score comes from <strong>200 held-out questions</strong> (the evalset: 50 from each dataset's validation split, never traced or trained on), answered through llama.cpp with the run's LoRA on the Q8_0 base, for the adapters at steps 50 and 100 and the final one. ~1.8 h per pilot, ~14 h in all. <code>scripts/pilot_sweep.py</code> runs all eight in order and picks P4-P8's settings by the rule below.</p>
+  <p class="note">Why not score inside the trainer every 100 steps, as planned: transformers generates ~24 tokens a second on this card even 8 answers at a time, so one scored evaluation of 200 thinking answers would take ~50 minutes, longer than the pilot's training. llama-server answers them in ~6-10 minutes, and it's the setup the model is served and RL-trained with. Checked on the smoke run's adapter: the same final calls as the transformers model.</p>
   <div class="panel scroll">
     <table>
       <thead><tr><th>Run</th><th>Objective</th><th class="num">Peak lr</th><th class="num">Rank</th><th>Answers</th></tr></thead>
@@ -352,7 +353,7 @@ Planned (thinking on, Spark's own tool-call format):
       </tbody>
     </table>
   </div>
-  <p class="note">The winner is the best score on executable checks (gretel's validation queries run in an in-memory SQLite database), with the validation loss as the tie-break. JEPA is kept only if it beats plain by more than the seed-to-seed difference (P7 vs P8). Better yardsticks (SQaLe's own databases, CypherBench's graphs) come with the benchmark downloads.</p>
+  <p class="note">The winner is the higher final exec accuracy on the evalset (SQL executed on gretel's real rows or on filled copies of SQaLe's schemas; Cypher executed on CypherBench's own graphs or on graphs built from text2cypher's schemas), with the validation loss breaking ties within half a point. JEPA is kept only if it beats plain by more than the seed-to-seed difference (P7 vs P8). <strong>The base model</strong> (no fine-tuning, same server and settings) scores 30.6% on the evalset: gretel 53.1%, SQaLe 34.9%, CypherBench 20.8%, text2cypher 10.0%.</p>
 </section>
 
 <section aria-labelledby="real">
@@ -477,6 +478,7 @@ Planned (thinking on, Spark's own tool-call format):
     <li><strong>Later, multi-turn traces</strong>: run Spark's exploratory calls on real rows and let it answer from them (gretel has rows; SQaLe's populated databases are in the approved downloads).</li>
   </ol>
   <p class="note">My recommendation: 3 + 4 + 2: download the CypherBench sampled graphs (~56 MB), then trace ~15k questions at effort low with the 1,024-token budget and 2 tries (~14 h), and train the rest of the mix with thinking off. 5 comes with the RL stage.</p>
+  <p class="note"><strong>Decided and running (2026-10-21):</strong> all three benchmarks downloaded (BIRD dev 0.35 GB, CypherBench 5.3 GB, SQaLe's schemas 4.0 GB); 15,000 questions (SQaLe 6,000, gretel 3,000, text2cypher 5,000, CypherBench 1,000), one thinking level each (65% high, 25% low, 10% off), up to 2 tries asked adaptively (a second try only for the unsolved), the 1,024-token budget; Cypher answers checked on CypherBench's sampled graphs and on schema-built graphs in a local Neo4j. First measurements: 37 answers a minute, ~11 h in all; pass rates SQaLe 29%, gretel 34%, CypherBench 27%, text2cypher 15%.</p>
 </section>
 
 </div>

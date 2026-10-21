@@ -398,6 +398,9 @@ def main() -> int:
     ap.add_argument("--only", default=None, help="run only these pilots, e.g. P1,P2")
     a = ap.parse_args()
     sweep = Sweep(a.traces)
+    import os
+
+    (sweep.dir / "driver.pid").write_text(str(os.getpid()), encoding="ascii")  # for watchers
     try:
         sweep.run(set(a.only.split(",")) if a.only else None)
     except Exception as e:
