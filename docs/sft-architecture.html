@@ -334,6 +334,61 @@ Planned (thinking on, Spark's own tool-call format):
   </ul>
 </section>
 
+<section aria-labelledby="sftqa">
+  <h2 id="sftqa"><span class="n">07b</span>Two questions about this kind of SFT</h2>
+  <p>Your SFTs so far were distillation runs on a given dataset (question, a larger model's reasoning, the answer), QLoRA on an H100. This plan differs from that in two places, and these are the two questions that difference raises.</p>
+
+  <div class="panel" style="display:flex;flex-direction:column;gap:12px">
+    <h3 style="margin:0">1 · Does the model being trained generate answers?</h3>
+    <p style="margin:0"><strong>No, not while it trains.</strong> Every SFT, this one included, trains by <em>teacher forcing</em>: the input is the prompt <em>plus</em> the target (here, the thought and the tool call), one forward and one backward pass, and the loss is the cross-entropy on the target's tokens only (the prompt is masked). Nothing is sampled during a training step. That part is exactly your distillation runs.</p>
+    <p style="margin:0">What differs is <strong>where the reasoning in the target comes from</strong>. Our four datasets have a question and a query, but no reasoning. There are three ways to get it:</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th></th><th>Who writes the reasoning</th><th>When</th><th>Is it checked?</th><th>What the model learns from</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Distillation SFT</strong><br><span class="note">your earlier runs</span></td><td>a larger teacher model</td><td>before training, once</td><td>usually not (or by a judge model)</td><td>the teacher's traces: it imitates a bigger model's style</td></tr>
+          <tr><td><strong>Self-generated SFT</strong><br><span class="note">rejection sampling, STaR, "RFT": this plan</span></td><td>the model itself (Spark, served by llama.cpp)</td><td>a separate stage <em>before</em> training (section 07)</td><td>every answer's query is executed; only correct ones are kept</td><td>its own correct traces: it sharpens its own reasoning</td></tr>
+          <tr><td><strong>RL</strong> (GRPO etc.)<br><span class="note">the stage after this plan</span></td><td>the model itself</td><td><em>during</em> training, every update</td><td>a reward from the same checkers</td><td>its own samples, scored, online</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin:0">So the generating happens <strong>before</strong> the SFT, in the stage that builds the dataset. The model plays the teacher and the query checker filters what it writes. Training itself is plain SFT on a fixed dataset, like your distillation runs. RL is the online version of the same idea: generate, check and update, all inside training.</p>
+    <p class="note" style="margin:0">Why self-generated here and not a bigger teacher: no larger model writes Spark's tool-call format and thinking style, and Spark's own traces keep its own length (kept thoughts average ~140-220 tokens) and wording. A 4B model trained to imitate a much bigger model's reasoning learns a style it can't sustain. Every kept trace is also verified by execution, and the server and checkers are the ones the RL stage will use.</p>
+  </div>
+
+  <div class="panel" style="display:flex;flex-direction:column;gap:12px">
+    <h3 style="margin:0">2 · Why llama.cpp, and why track tokens per second?</h3>
+    <p style="margin:0"><strong>Training doesn't use llama.cpp.</strong> It runs in PyTorch (transformers + PEFT) with the picture you know: a frozen base with a LoRA adapter trained on top. One difference from your H100 runs: there you used QLoRA, the base frozen in 4-bit to save memory. Here the 4B base fits on the 16 GB card in bf16, so it is frozen in bf16, with no quantization error in the training forward pass, and the LoRA trains in bf16.</p>
+    <p style="margin:0">llama.cpp handles the two jobs where we have to <strong>generate a lot of text</strong>, both outside the training step:</p>
+    <ol style="margin:0;padding-left:1.3em">
+      <li><strong>Building the training data</strong> (the trace stage): 15,000 questions answered with thinking, ~5.8M generated tokens in the first round.</li>
+      <li><strong>Scoring trained adapters</strong>: 200 held-out questions answered and their queries executed, for 3 adapters per pilot across 8 pilots (~4,800 answers).</li>
+    </ol>
+    <p style="margin:0">Neither job existed in your earlier SFTs: the dataset came with its traces, and training needs only forward and backward passes, so the training step's tokens per second was the only speed that mattered. That number is still tracked here (~800 tokens/s per pilot). Here, though, <strong>generation speed decides how many questions we can afford to trace and how long each evaluation takes</strong>, so it gets tracked too.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Generating on this card (RX 7800 XT)</th><th class="num">Tokens / s</th><th class="num">200 scored answers</th><th class="num">15,000 traced questions</th></tr></thead>
+        <tbody>
+          <tr><td>transformers <code>generate</code> (the training stack)</td><td class="num">~20 alone, ~24 in batches of 8</td><td class="num">~50 min</td><td class="num">~3 days</td></tr>
+          <tr><td>llama.cpp, Q8_0, 16 at once</td><td class="num">89 alone, ~800 at 16</td><td class="num">5.3 min (measured, P1)</td><td class="num">~7 h (measured, round 0)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin:0">On an H100 these jobs would usually go to vLLM or SGLang, servers with continuous batching and a paged KV cache that also generate far faster than transformers. They aren't an option on this consumer AMD card, because their ROCm builds target data-centre GPUs. Spark's new architecture also needed porting, which your llama.cpp fork now has.</p>
+    <p class="note" style="margin:0">Why Q8 for these jobs: generation speed is set by how many bytes each token has to read, and Q8_0 halves bf16 while picking the same top token as bf16 99.42% of the time. The traces are checked by execution anyway, and the scores are measured on the setup the model will be served with. The LoRA trained in bf16 is attached to the frozen Q8_0 base when the server loads (<code>--lora</code>): the same frozen-base-plus-adapter picture, just served. On the smoke run's adapter it gave the same final calls as the transformers model.</p>
+  </div>
+
+  <div class="panel" style="display:flex;flex-direction:column;gap:8px">
+    <h3 style="margin:0">What to look for when you read the runs</h3>
+    <ul style="margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:4px">
+      <li><strong>Trace runs</strong> (dashboard): answers a minute and generated tokens a second (how long building the data takes), and the pass rate per dataset (how much of it is usable).</li>
+      <li><strong>Pilot runs</strong>: the training loss, the training tokens a second (the familiar number), and the validation loss every 25 steps.</li>
+      <li><strong>A flat validation loss is expected here</strong>: the targets are the model's own samples, which it already finds likely (P1: 0.349 at step 25, 0.347 at the end). With distillation data the loss falls a lot, because the model is learning someone else's text.</li>
+      <li><strong>The signal is the scored exec accuracy</strong> on the 200 held-out questions, from llama.cpp after training at steps 50 and 100 and at the end: base model 30.6%, P1 35.0%.</li>
+    </ul>
+  </div>
+</section>
+
 <section aria-labelledby="pilots">
   <h2 id="pilots"><span class="n">08</span>The pilot sweep</h2>
   <p>Eight runs on the same traced data, each changing one thing: the passing answers of the pilot trace run (15,000 training questions; a kept example averages ~890 tokens, so ~4-5M tokens and ~140 steps at batch 32). Validation loss every 25 steps on held-out traced questions. The score comes from <strong>200 held-out questions</strong> (the evalset: 50 from each dataset's validation split, never traced or trained on), answered through llama.cpp with the run's LoRA on the Q8_0 base, for the adapters at steps 50 and 100 and the final one. ~1.8 h per pilot, ~14 h in all. <code>scripts/pilot_sweep.py</code> runs all eight in order and picks P4-P8's settings by the rule below.</p>
