@@ -85,6 +85,7 @@ class OptimConfig(_Strict):
     batch: int = 1
     grad_accum: int = 16
     warmup: float = 0.03  # a fraction of the optimizer steps (or a step count when >= 1)
+    warmup_min_steps: int = 0  # ... but at least this many (3% of a short run is a few steps)
     weight_decay: float = 0.0
     max_grad_norm: float = 1.0
     max_len: int = 5300  # longer examples are dropped (and counted)
@@ -112,6 +113,10 @@ class JepaSpec(_Strict):
 class EvalConfig(_Strict):
     every_epoch: bool = True  # evaluate after each epoch
     every_steps: int = 0  # ... and every N optimizer steps (0 = off), on the same fixed subsets
+    # the validation loss alone (no generation) every N steps between those (0 = off)
+    loss_every_steps: int = 0
+    # the scored metric that picks `<run>/best/` (higher is better; ties: the lower val/loss)
+    best_metric: str = "val/public/exec_acc"
     # public val: generated and scored here (publiceval.py: gretel executed in sqlite, the
     # others exact match + a parse check), a fixed subset stratified over the datasets
     public_n: int = 200

@@ -231,6 +231,7 @@ def run_loop(
     resume_from: Path | None = None,
     stop_after: int | None = None,
     events: Events = NO_EVENTS,
+    on_loss=None,
 ) -> LoopResult:
     """Train `model` (a PEFT model) on `train_feats` for `cfg.optim.epochs` epochs.
 
@@ -251,6 +252,7 @@ def run_loop(
     steps_per_epoch = math.ceil(n_batches / o.grad_accum)
     total = steps_per_epoch * o.epochs
     warmup = int(o.warmup if o.warmup >= 1 else round(o.warmup * total))
+    warmup = max(warmup, min(o.warmup_min_steps, total))
     sched = get_cosine_schedule_with_warmup(opt, warmup, max(total, 1))
     gate = JepaGate(j.ratio if j.enabled else 1.0, seed=cfg.seed)
     if resume_from is not None:
@@ -271,6 +273,7 @@ def run_loop(
             checkpointer.save(model, opt, sched, st, gate)
 
     every_eval = cfg.eval.every_steps
+    every_loss = cfg.eval.loss_every_steps
     for epoch in range(state.epoch, o.epochs):
         order = length_grouped_batches(lengths, o.batch, seed=cfg.seed + epoch)
         groups = [order[s : s + o.grad_accum] for s in range(0, len(order), o.grad_accum)]
@@ -329,9 +332,14 @@ def run_loop(
                     m["train/peak_gb"] = peak
                 logger.log(m, step)
             last_of_epoch = g == len(groups) - 1
-            if on_eval is not None and every_eval > 0 and step % every_eval == 0 \
-                    and not last_of_epoch:  # fmt: skip
+            scored_now = every_eval > 0 and step % every_eval == 0 and not last_of_epoch
+            if on_eval is not None and scored_now:
                 metrics = _eval_safely(on_eval, (step, frac), f"step {step}", logger)
+                if metrics:
+                    logger.log({**metrics, "epoch": frac}, step)
+            elif on_loss is not None and every_loss > 0 and step % every_loss == 0 \
+                    and not last_of_epoch:  # fmt: skip
+                metrics = _eval_safely(on_loss, (step,), f"val loss {step}", logger)
                 if metrics:
                     logger.log({**metrics, "epoch": frac}, step)
             if checkpointer is not None and checkpointer.due(step) and not last_of_epoch:
@@ -814,21 +822,55 @@ def _train(cfg, paths, run_dir, run_name, launched_by, ckpt, wandb_id, device, s
             logger.echo(f"samples not written ({tag}): {type(e).__name__}")
         return metrics
 
+    best_dir = run_dir / "best"
+    best_file = best_dir / "best.json"
+    best = json.loads(best_file.read_text(encoding="utf-8")) if best_file.exists() else None
+
+    def keep_best(metrics: dict[str, Any], step: int) -> None:
+        """Copy the adapter to <run>/best/ when the scored metric improves (rolling
+        checkpoints keep only the last few, so the best one would otherwise be lost)."""
+        nonlocal best
+        score = metrics.get(cfg.eval.best_metric)
+        if score is None:
+            return
+        loss = metrics.get("val/loss")
+        better = best is None or score > best["score"] or (
+            score == best["score"] and loss is not None and best.get("loss") is not None
+            and loss < best["loss"])  # fmt: skip
+        if not better:
+            return
+        model.save_pretrained(str(best_dir), save_embedding_layers=False)
+        best = {"step": step, "metric": cfg.eval.best_metric, "score": score, "loss": loss}
+        best_file.write_text(json.dumps(best, indent=1), encoding="utf-8")
+        events.emit("best", **best)
+        metrics["val/best_step"] = float(step)
+
+    def on_loss(step: int) -> dict[str, Any]:
+        free_cuda(device)
+        t0 = time.perf_counter()
+        m = validation_loss(model, val_feats, ct, cfg, device)
+        m["val/loss_s"] = time.perf_counter() - t0
+        events.emit("val_loss", step=step, loss=m.get("val/loss"))
+        return m
+
     def on_epoch_end(epoch: int, step: int) -> dict[str, Any]:
         metrics = evaluate(f"epoch{epoch}", step) if cfg.eval.every_epoch else {}
+        keep_best(metrics, step)
         log_adapter(run, cfg, run_dir / f"adapter_epoch{epoch}", ["latest", f"epoch-{epoch}"],
                     {**art_meta, "epoch": epoch, "step": step}, logger.echo,
                     events)  # fmt: skip
         return metrics
 
     def on_eval(step: int, epoch: float) -> dict[str, Any]:
-        return evaluate(f"step{step:06d}", step)
+        metrics = evaluate(f"step{step:06d}", step)
+        keep_best(metrics, step)
+        return metrics
 
     try:
         result = run_loop(model, ct, train_feats, cfg, run_dir, logger, device,
                           on_epoch_end=on_epoch_end, on_eval=on_eval,
                           checkpointer=checkpointer, resume_from=ckpt,
-                          stop_after=stop_after, events=events)  # fmt: skip
+                          stop_after=stop_after, events=events, on_loss=on_loss)  # fmt: skip
         if result.final_adapter is None:  # stopped early (tests: a simulated crash)
             return run_dir
         log_adapter(run, cfg, result.final_adapter, ["latest", "final"],

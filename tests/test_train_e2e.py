@@ -197,3 +197,21 @@ def test_dashboard_files(env, monkeypatch):
     assert "resumed" in kinds and kinds[-1] == "done"
     info = json.loads((paths.runs / "e" / "run_info.json").read_text())
     assert len(info["resumed_at"]) == 1 and info["resumed_from_step"] == 6  # ckpts 3, 4, 6
+
+
+def test_loss_only_steps_warmup_floor_and_best_copy(env):
+    paths, cfg, _ = env
+    cfg = cfg.model_copy(deep=True)
+    cfg.optim.epochs, cfg.optim.warmup, cfg.optim.warmup_min_steps = 1, 0.01, 2
+    cfg.eval.every_steps, cfg.eval.loss_every_steps = 3, 1
+    cfg.eval.best_metric = "val/public/n"  # always 4: the first scored eval wins, then ties
+    d = train_mod.train(cfg, name="best", paths=paths, device="cpu")
+    log = [json.loads(x) for x in (d / "train_log.jsonl").read_text().splitlines()]
+    loss_only = {r["step"] for r in log if "val/loss" in r and "val/public/n" not in r}
+    scored = {r["step"] for r in log if "val/public/n" in r}
+    assert loss_only == {1, 2} and scored == {3, 4}  # step 4: the end of the epoch
+    lr = {r["step"]: r["train/lr"] for r in log if "train/lr" in r}
+    assert lr[1] < lr[2] <= cfg.optim.lr  # 2 warmup steps although 1% of 4 rounds to 0
+    best = json.loads((d / "best" / "best.json").read_text())
+    assert best["metric"] == "val/public/n" and best["step"] in (3, 4)
+    assert (d / "best" / "adapter_model.safetensors").exists()

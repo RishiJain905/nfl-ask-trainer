@@ -18,7 +18,7 @@ from typing import Any
 KINDS = {
     "start", "data_ready", "model_loaded", "resumed", "eval_start", "eval_end", "oom_split",
     "verifier_failed", "checkpoint_saved", "artifact_uploaded", "artifact_failed",
-    "epoch_end", "done", "crashed",
+    "epoch_end", "done", "crashed", "val_loss", "best",
 }  # fmt: skip
 
 
