@@ -6,9 +6,11 @@
   result sets are compared order-insensitively (as multisets of rows), numbers rounded to the
   gold's precision per column (an int and the same float are equal). A gold that fails to run
   is reported (`gold_failed`) and left out of `exec_acc`.
-- **sqale** (SQLite) and the other SQL sets: exact match after whitespace normalisation, plus
-  a parse check: `EXPLAIN <query>` against the schema (sqale's DDL from
-  `public/sqale/raw/schemas_ddl.parquet`), which also catches unknown tables and columns.
+- **sqale** (SQLite) and the other SQL sets: a parse check, `EXPLAIN <query>` against the
+  schema (sqale's DDL from `public/sqale/raw/schemas_ddl.parquet`), which also catches unknown
+  tables and columns; then executed on randomly filled copies of that schema
+  (`querycheck.check_sql`, the test-suite idea): `exec_ok` is True / False when some copy
+  returned rows, None when none did; and an exact match after whitespace normalisation.
 - **text2cypher, cypherbench** (Cypher): exact match after whitespace normalisation, plus a
   light syntax check (balanced brackets and quotes outside strings, a read clause first, a
   RETURN, no write clause, no $parameters).
@@ -21,30 +23,28 @@ handler aborts runaway joins).
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
-import time
 from collections import Counter, defaultdict
 from collections.abc import Sequence
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from asktrainer.data.schema import Example
-
-TIME_LIMIT_S = 2.0
-MAX_ROWS = 10_000
-
-CYPHER_START = re.compile(r"^(OPTIONAL\s+MATCH|MATCH|WITH|UNWIND|CALL|RETURN)\b", re.IGNORECASE)
-CYPHER_WRITE = re.compile(
-    r"\b(CREATE|MERGE|DELETE|DETACH|SET|REMOVE|DROP|FOREACH|LOAD\s+CSV)\b", re.IGNORECASE
+from asktrainer.querycheck import (  # noqa: F401  (re-exported for callers and tests)
+    CYPHER_START,
+    CYPHER_WRITE,
+    MAX_ROWS,
+    SQL_READ,
+    STRINGS,
+    TIME_LIMIT_S,
+    _connect,
+    _decimals,
+    _norm_value,
+    _run,
+    cypher_ok,
+    normalise,
+    same_results,
 )
-SQL_READ = re.compile(r"^\s*(SELECT|WITH)\b", re.IGNORECASE)
-STRINGS = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|`[^`]*`")
-
-
-def normalise(q: str) -> str:
-    return " ".join(q.strip().rstrip(";").split())
 
 
 def parse_reply(output: str) -> tuple[bool, str | None]:
@@ -57,84 +57,6 @@ def parse_reply(output: str) -> tuple[bool, str | None]:
         return False, None
     q = obj.get("query")
     return True, q if isinstance(q, str) and q.strip() else None
-
-
-def cypher_ok(q: str) -> tuple[bool, str]:
-    s = q.strip()
-    if not CYPHER_START.match(s):
-        return False, "start"
-    bare = STRINGS.sub("''", s)
-    if s.count("'") % 2 and bare.count("'") % 2:  # an unterminated string literal
-        return False, "quotes"
-    depth = {"(": 0, "[": 0, "{": 0}
-    close = {")": "(", "]": "[", "}": "{"}
-    for ch in bare:
-        if ch in depth:
-            depth[ch] += 1
-        elif ch in close:
-            depth[close[ch]] -= 1
-            if depth[close[ch]] < 0:
-                return False, "brackets"
-    if any(depth.values()):
-        return False, "brackets"
-    if not re.search(r"\bRETURN\b", bare, re.IGNORECASE):
-        return False, "no_return"
-    if CYPHER_WRITE.search(bare):
-        return False, "write"
-    if re.search(r"\$\w+", bare):
-        return False, "parameter"
-    return True, "ok"
-
-
-def _connect(script: str | None) -> sqlite3.Connection:
-    db = sqlite3.connect(":memory:")
-    if script:
-        db.executescript(script)
-    return db
-
-
-def _run(db: sqlite3.Connection, q: str) -> list[tuple]:
-    deadline = time.monotonic() + TIME_LIMIT_S
-    db.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 10_000)
-    try:
-        cur = db.execute(q)
-        rows = cur.fetchmany(MAX_ROWS + 1)
-    finally:
-        db.set_progress_handler(None, 0)
-    if len(rows) > MAX_ROWS:
-        raise RuntimeError("too many rows")
-    return rows
-
-
-def _decimals(v: float) -> int:
-    d = Decimal(repr(v)).as_tuple().exponent
-    return min(6, max(0, -d)) if isinstance(d, int) else 6
-
-
-def _norm_value(v: Any, places: int | None) -> Any:
-    if isinstance(v, bool):
-        v = int(v)
-    if isinstance(v, (int, float)):
-        return round(float(v), places if places is not None else 6)
-    return v
-
-
-def same_results(gold: list[tuple], pred: list[tuple]) -> bool:
-    """Order-insensitive multiset comparison; numbers at the gold's precision per column."""
-    if not gold and not pred:
-        return True
-    if not gold or not pred or len(gold[0]) != len(pred[0]):
-        return False
-    ncol = len(gold[0])
-    places: list[int | None] = []
-    for c in range(ncol):
-        floats = [r[c] for r in gold if isinstance(r[c], float)]
-        places.append(max((_decimals(f) for f in floats), default=None))
-
-    def norm(rows):
-        return Counter(tuple(_norm_value(r[c], places[c]) for c in range(ncol)) for r in rows)
-
-    return norm(gold) == norm(pred)
 
 
 class PublicData:
@@ -182,19 +104,46 @@ class PublicData:
         return None
 
 
+def parse_call(ex: Example, output: str) -> tuple[bool, str | None, str]:
+    """(a parsable tool call, its query or None, why not) for a `call` example's generation:
+    the thought up to `</think>`, then Spark's `<tool_call>` text."""
+    from asktrainer.querycheck import calls_from_message
+
+    text = output.split("</think>", 1)[1] if "</think>" in output else output
+    calls = calls_from_message({"content": text})
+    if not calls:
+        return False, None, "no_call"
+    fn = ex.messages[-1].tool_calls[0]["function"]
+    name, arg = fn["name"], next(iter(fn["arguments"]))
+    if len(calls) > 1:
+        return True, None, "several_calls"
+    if calls[0][0] != name:
+        return True, None, "wrong_tool"
+    q = calls[0][1].get(arg)
+    return True, (q if isinstance(q, str) and q.strip() else None), "bad_argument"
+
+
 def score(ex: Example, output: str, data: PublicData) -> dict[str, Any]:
     item: dict[str, Any] = {"id": ex.id, "origin": ex.origin, "dialect": ex.dialect,
                             "json_ok": False, "parse_ok": False, "exact": False,
                             "exec_ok": None, "gold_failed": False, "reason": ""}  # fmt: skip
-    ok, q = parse_reply(output)
-    item["json_ok"] = ok
-    if not ok:
-        item["reason"] = "not_json"
-        return item
-    if q is None:
-        item["reason"] = "no_query"
-        return item
-    gold = json.loads(ex.target).get("query", "")
+    if ex.task == "call":  # `json_ok` here means: a parsable call to the right tool
+        ok, q, why = parse_call(ex, output)
+        item["json_ok"] = ok and q is not None
+        if q is None:
+            item["reason"] = why
+            return item
+        gold = ex.target
+    else:
+        ok, q = parse_reply(output)
+        item["json_ok"] = ok
+        if not ok:
+            item["reason"] = "not_json"
+            return item
+        if q is None:
+            item["reason"] = "no_query"
+            return item
+        gold = json.loads(ex.target).get("query", "")
     item["exact"] = normalise(q) == normalise(gold)
     if ex.dialect == "cypher":
         item["parse_ok"], item["reason"] = cypher_ok(q)
@@ -217,11 +166,18 @@ def score(ex: Example, output: str, data: PublicData) -> dict[str, Any]:
             item["parse_ok"] = True
         except sqlite3.Error as e:
             item["reason"] = f"parse:{type(e).__name__}"
-            if ex.origin == "gretel":
-                item["exec_ok"] = False
+            item["exec_ok"] = False  # every SQL set is executed (real rows or filled copies)
             return item
-        if ex.origin != "gretel":
-            item["reason"] = "ok"
+        if ex.origin != "gretel":  # no rows: compare on randomly filled copies of the schema
+            from asktrainer.querycheck import check_sql
+
+            chk = check_sql(q, gold, script, real_rows=False)
+            item["exec_ok"] = {"pass": True, "fail": False}.get(chk["verdict"])
+            if item["exec_ok"] is None:
+                item["reason"] = "ok"
+            else:
+                item["reason"] = "match" if item["exec_ok"] else chk["reason"]
+            item["checked_by"] = chk.get("checked_by")
             return item
         try:
             g = _run(db, gold)

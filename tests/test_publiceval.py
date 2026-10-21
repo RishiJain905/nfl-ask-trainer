@@ -78,7 +78,11 @@ def test_sqale_parse_check_against_its_schema():
     e = ex("sqale", "SELECT name FROM t", db_id="schema_1")
     assert pe.score(e, reply("SELECT name FROM t WHERE id = 3"), data)["parse_ok"] is True
     item = pe.score(e, reply("SELECT nam FROM t"), data)
-    assert item["parse_ok"] is False and item["exec_ok"] is None  # sqale isn't executed
+    assert item["parse_ok"] is False and item["exec_ok"] is False
+    # no rows of its own: executed on randomly filled copies of the schema (querycheck)
+    same = pe.score(e, reply("SELECT t.name FROM t"), data)
+    assert same["exec_ok"] is True and same["checked_by"] == "fuzz"
+    assert pe.score(e, reply("SELECT name FROM t WHERE id = 3"), data)["exec_ok"] is False
 
 
 def test_cypher_light_check():
