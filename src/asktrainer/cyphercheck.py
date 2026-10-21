@@ -45,7 +45,11 @@ from asktrainer.querycheck import (
 )
 
 NEO4J_URL = "http://127.0.0.1:7476"
-CYPHERBENCH = Path(r"D:\nfl-ml-data\ask\benchmarks\cypherbench")
+CYPHERBENCH = (  # the downloaded benchmark (scripts/download_benchmarks.py), Windows or WSL
+    Path(r"D:\nfl-ml-data\ask\benchmarks\cypherbench")
+    if sys.platform == "win32"
+    else Path("/mnt/d/nfl-ml-data/ask/benchmarks/cypherbench")
+)
 FUZZ_SEEDS = (11, 23, 37)
 ORDER_SEED = 53
 NODES_PER_LABEL = 14
