@@ -84,6 +84,10 @@ BASE = {
 }
 
 
+class Held(Exception):
+    """A manual pause (the HOLD file in the runs folder) before a new pilot starts."""
+
+
 def now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
@@ -350,6 +354,8 @@ class Sweep:
         run_dir = DATA / "finetune" / name
         log = self.dir / f"{name}.train.log"
         if not (run_dir / "DONE").exists():
+            if not (run_dir / "config.json").exists() and (DATA / "finetune" / "HOLD").exists():
+                raise Held(p)  # a manual pause before a new pilot (remove the file to go on)
             self.status(phase="pilot", pilot=p, run=name, note="training")
             if (run_dir / "config.json").exists():
                 cmd = f"ask-trainer train --resume {name} --launched-by agent"
@@ -358,6 +364,8 @@ class Sweep:
                     f"ask-trainer train --config {_wsl(cfg_path)} --name {name} --launched-by agent"
                 )
             r = self.wsl(cmd, log=log)
+            if r.returncode == 3 and not (run_dir / "config.json").exists():
+                raise Held(p)  # `ask-trainer train` found the HOLD file
             if r.returncode != 0 or not (run_dir / "DONE").exists():
                 raise RuntimeError(f"{name} training failed (exit {r.returncode}): see {log}")
         res = self.state["results"].get(p) or {"config": cfg, "run": name, "evals": {}}
@@ -471,6 +479,11 @@ def main() -> int:
     (sweep.dir / "driver.pid").write_text(str(os.getpid()), encoding="ascii")  # for watchers
     try:
         sweep.run(set(a.only.split(",")) if a.only else None)
+    except Held as h:
+        hold = DATA / "finetune" / "HOLD"
+        note = f"held before {h}: remove {hold} and start the driver again to go on"
+        sweep.status(phase="paused", pilot=str(h), note=note)
+        return 0
     except Exception as e:
         sweep.status(phase="failed", error=f"{type(e).__name__}: {str(e)[:600]}")
         return 1

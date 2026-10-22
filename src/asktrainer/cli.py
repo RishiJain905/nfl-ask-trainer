@@ -106,6 +106,10 @@ def train_cmd(args) -> int:
     from asktrainer.config import TrainConfig
 
     runs = get_paths().runs
+    hold = runs / "HOLD"
+    if hold.exists() and not args.resume:  # a manual pause: nothing new starts (resumes may)
+        print(f"train: held ({hold} exists); remove it to start new runs", file=sys.stderr)
+        return 3
     if args.resume:  # the run's own config (read here: the backend flags precede torch)
         run = Path(args.resume)
         run = run if (run / "config.json").exists() else runs / args.resume
