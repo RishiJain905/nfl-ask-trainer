@@ -335,8 +335,8 @@ Planned (thinking on, Spark's own tool-call format):
 </section>
 
 <section aria-labelledby="sftqa">
-  <h2 id="sftqa"><span class="n">07b</span>Two questions about this kind of SFT</h2>
-  <p>Your SFTs so far were distillation runs on a given dataset (question, a larger model's reasoning, the answer), QLoRA on an H100. This plan differs from that in two places, and these are the two questions that difference raises.</p>
+  <h2 id="sftqa"><span class="n">07b</span>Questions about this kind of SFT</h2>
+  <p>Your SFTs so far were distillation runs on a given dataset (question, a larger model's reasoning, the answer), QLoRA on an H100. This plan differs from that in a few places, and these are the questions those differences raise.</p>
 
   <div class="panel" style="display:flex;flex-direction:column;gap:12px">
     <h3 style="margin:0">1 · Does the model being trained generate answers?</h3>
@@ -376,6 +376,44 @@ Planned (thinking on, Spark's own tool-call format):
     </div>
     <p style="margin:0">On an H100 these jobs would usually go to vLLM or SGLang, servers with continuous batching and a paged KV cache that also generate far faster than transformers. They aren't an option on this consumer AMD card, because their ROCm builds target data-centre GPUs. Spark's new architecture also needed porting, which your llama.cpp fork now has.</p>
     <p class="note" style="margin:0">Why Q8 for these jobs: generation speed is set by how many bytes each token has to read, and Q8_0 halves bf16 while picking the same top token as bf16 99.42% of the time. The traces are checked by execution anyway, and the scores are measured on the setup the model will be served with. The LoRA trained in bf16 is attached to the frozen Q8_0 base when the server loads (<code>--lora</code>): the same frozen-base-plus-adapter picture, just served. On the smoke run's adapter it gave the same final calls as the transformers model.</p>
+  </div>
+
+  <div class="panel" style="display:flex;flex-direction:column;gap:12px">
+    <h3 style="margin:0">3 · How a trained adapter is scored</h3>
+    <p style="margin:0"><strong>The adapter goes onto the frozen Q8_0 base, and llama.cpp answers the questions.</strong> For each saved adapter of a pilot:</p>
+    <ol style="margin:0;padding-left:1.3em">
+      <li>The PEFT adapter (bf16 safetensors) is converted to a GGUF LoRA (f16, ~60 MB) with the fork's <code>convert_lora_to_gguf.py</code>. Nothing is merged into the base.</li>
+      <li>llama-server loads the shared Q8_0 base file and attaches the LoRA when it starts (<code>--lora &lt;file&gt;</code>).</li>
+      <li>The 200 held-out questions (the evalset) are answered greedily (temperature 0), with thinking on high and the 1,024-token thinking budget, 16 at once: ~5 minutes.</li>
+      <li>The answers' queries are executed (in WSL): SQL in SQLite on real or filled rows, Cypher in the local Neo4j on CypherBench's graphs or schema-built ones. The result is the exec accuracy: the share of checkable answers whose rows match the gold query's.</li>
+    </ol>
+    <p class="note" style="margin:0">The adapter was trained against the bf16 base but is scored on Q8_0. On the smoke run's adapter this gave the same final calls as the bf16 model; every pilot is scored the same way, so the comparison is fair, and it is the setup we would deploy.</p>
+    <p style="margin:0"><strong>Why three adapters per pilot (steps 50, 100 and the final 107), not just the final one?</strong> The decision rule uses only the <em>final</em> score. Steps 50 and 100 are there for the <strong>curve</strong>. The real run's size (~52M vs ~100M tokens) depends on whether the scores are still climbing at the end of a pilot, and on this self-generated data the validation loss barely moves, so the scored curve is the only "still improving?" signal. It has already earned its place:</p>
+    <ul style="margin:0;padding-left:1.2em">
+      <li>P1 went 33.2 → 34.8 → 35.0%: still rising slightly, but flattening.</li>
+      <li>P4 (rank 64) went 34.6 → 33.2 → 33.5%: it peaked early, the overfitting sign that ruled rank 64 out.</li>
+    </ul>
+    <p class="note" style="margin:0">The cost: ~7 minutes per extra adapter (convert, start the server, answer, score), ~14 minutes a pilot, ~12% of the sweep. The step-100 point adds the least: it is only 7 steps before the end, where the cosine schedule has the learning rate near zero.</p>
+  </div>
+
+  <div class="panel" style="display:flex;flex-direction:column;gap:12px">
+    <h3 style="margin:0">4 · How 16 answers at once fit on a 16 GB card</h3>
+    <p style="margin:0"><strong>Memory.</strong> The weights are loaded <em>once</em> and shared by all 16 requests. What each answer needs for itself is only its KV cache: the attention keys and values of the tokens it has so far.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>On the GPU (llama-server, 16 slots)</th><th class="num">Size</th></tr></thead>
+        <tbody>
+          <tr><td>Q8_0 weights, loaded once and shared</td><td class="num">4.4 GB</td></tr>
+          <tr><td>One KV pool for all 16 answers (65,536 tokens, <code>-kvu</code>)</td><td class="num">~2-3 GB</td></tr>
+          <tr><td>Work buffers</td><td class="num">a few hundred MB</td></tr>
+          <tr><td><strong>Measured total</strong></td><td class="num"><strong>7.6 GB</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin:0">Spark's KV is small: 27 of its 36 layers use a sliding window, so they keep only each answer's last 512 tokens, and only 9 layers keep the full context (4 KV heads × 256 dims). An answer is ~1,100 tokens (prompt ~700, thought and call ~400), so 16 in flight use roughly 18k of the pool's 65k tokens. The trainer is never on the GPU at the same time: scoring starts after training has finished.</p>
+    <p style="margin:0"><strong>Compute: continuous batching.</strong> At every decoding step llama-server takes the next token of <em>every</em> active answer and runs one forward pass for all of them together. Generation is limited by reading the weights from memory: one answer alone reads all 4.4 GB per token, about 89 tokens a second. With 16 answers one read serves 16 tokens: ~800 tokens a second in total, ~50 per answer. That's about 9×, not 16×, because each answer's attention and the compute still grow; past 16 slots it measured flat (compute-bound).</p>
+    <p style="margin:0">"Continuous" means no answer waits for a batch to finish: when one finishes, its slot takes the next question at once, and that question's prompt is processed alongside the others' decoding, so the GPU stays busy.</p>
+    <p class="note" style="margin:0">Why transformers is so much slower here: its <code>generate</code> batches statically (sequences padded to the same length, the batch waits for its longest answer), uses eager attention and has no shared KV pool. That's ~24 tokens a second even 8 at a time on this card.</p>
   </div>
 
   <div class="panel" style="display:flex;flex-direction:column;gap:8px">
