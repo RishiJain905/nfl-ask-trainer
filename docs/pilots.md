@@ -97,4 +97,27 @@ doesn't change the ranking, and the pilot results come ~5 hours sooner.
 
 ## Results
 
-(Filled in as the pilots finish.)
+The pilot data: 3,415 training + 379 validation examples (the first round of the trace run; SQaLe
+1,617, gretel 1,073, text2cypher 872, CypherBench 232; 121 more passed but were cut by the thinking
+budget). The base model on the evalset: 30.6% (W&B `evalset-base` run `j61nm1fp`).
+
+**The learning rate (P1-P3, LoRA rank 16, 2026-10-21):** exec accuracy on the evalset, at steps 50 /
+100 / final (107):
+
+| | P1 (1e-4) | P2 (2e-4) | P3 (4e-4) |
+|---|---|---|---|
+| all, step 50 / 100 / final | 33.2 / 34.8 / **35.0%** | 35.1 / 33.7 / 34.4% | 33.5 / 34.4 / 34.1% |
+| gretel (final) | 60.0% | 63.3% | 58.0% |
+| SQaLe | 34.9% | 29.5% | 37.2% |
+| CypherBench | 30.0% | 34.0% | 26.5% |
+| text2cypher | 10.0% | 7.0% | 11.6% |
+| valid calls | 96.5% | 95.0% | 96.5% |
+| final validation loss | 0.347 | 0.348 | 0.351 |
+
+By the rule P1 (1e-4) wins: 35.0% vs 34.4% is just beyond the half-point tie band, and it also has
+the lowest validation loss. The three are within the noise of ~180 checked questions (about +/-3.5
+points), so the honest reading is "1e-4 is at least as good"; P7 (P1 again with seed 7) will show
+how large the seed-to-seed difference is. Every pilot beats the base model by ~4 points, from gretel
+and CypherBench; text2cypher, the set with the fewest checked traces, didn't move. The validation
+loss barely moves on this data (0.349 -> 0.347): the targets are the model's own samples. A higher
+learning rate raises it (P3: 0.364 at step 25).
