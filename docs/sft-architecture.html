@@ -416,6 +416,25 @@ Planned (thinking on, Spark's own tool-call format):
     <p class="note" style="margin:0">Why transformers is so much slower here: its <code>generate</code> batches statically (sequences padded to the same length, the batch waits for its longest answer), uses eager attention and has no shared KV pool. That's ~24 tokens a second even 8 at a time on this card.</p>
   </div>
 
+  <div class="panel" style="display:flex;flex-direction:column;gap:12px">
+    <h3 style="margin:0">5 · Why one answer runs at ~89 tokens/s but 16 together reach ~800</h3>
+    <p style="margin:0"><strong>A single answer is the fastest <em>for that answer</em></strong>: ~89 tokens a second, against ~50 per answer when 16 run together. The ~800 is the <em>total</em> across all 16. Batching doesn't make any one answer faster; it gets more total work out of the GPU.</p>
+    <p style="margin:0"><strong>Why one answer can't go faster than ~89.</strong> To produce each token, the GPU has to read <em>every</em> weight of the model, all 4.4 GB of Q8_0, from its memory into its compute units. The arithmetic per weight is tiny: one multiply-add. The card streams memory at ~624 GB/s, while its compute could do far more math than that much data can feed it. One answer at 89 tokens a second reads ~390 GB/s of weights, most of what the card delivers once each answer's own attention memory and the kernel overheads are counted. The compute units sit mostly idle, waiting for weights to arrive: the limit is <strong>memory bandwidth</strong>, not compute.</p>
+    <p style="margin:0"><strong>Why 16 at once reach ~800 in total.</strong> In one decoding step llama.cpp reads each weight <em>once</em> and multiplies it against 16 token vectors, one per answer. The expensive part, reading 4.4 GB, is paid once for 16 tokens; the cheap part, the math, grows 16× and still fits in the idle compute. A 16-answer step takes only ~1.8× as long as a single-answer step, yet produces 16 tokens.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th></th><th class="num">Tokens per step</th><th class="num">Speed per answer</th><th class="num">Total</th></tr></thead>
+        <tbody>
+          <tr><td>1 answer</td><td class="num">1</td><td class="num">~89 tokens/s</td><td class="num">~89 tokens/s</td></tr>
+          <tr><td>16 answers (continuous batching)</td><td class="num">16</td><td class="num">~50 tokens/s</td><td class="num">~800 tokens/s</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin:0">An analogy: a car versus a bus on a congested road. The car gets one person there fastest; the bus is a bit slower per trip but moves 16 people at once. The road (memory bandwidth) is the bottleneck, not the engine (compute).</p>
+    <p style="margin:0"><strong>Why it stops at ~16.</strong> Each answer has its own attention memory (its KV cache), which can't be shared and is read separately. Unpacking the Q8_0 weights and the math itself also start to cost real time. Around 16 answers these catch up, and more answers stop raising the total, which is why the server runs 16 slots.</p>
+    <p class="note" style="margin:0">The same effect shows inside a single request. The prompt is processed at ~900-950 tokens a second (the server's own logs), even for one request, because all its tokens go through the model in one pass: a batch within one request. Only the token-by-token writing of the answer is stuck at the memory-bound ~89 a second.</p>
+  </div>
+
   <div class="panel" style="display:flex;flex-direction:column;gap:8px">
     <h3 style="margin:0">What to look for when you read the runs</h3>
     <ul style="margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:4px">
