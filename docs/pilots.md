@@ -121,3 +121,15 @@ how large the seed-to-seed difference is. Every pilot beats the base model by ~4
 and CypherBench; text2cypher, the set with the fewest checked traces, didn't move. The validation
 loss barely moves on this data (0.349 -> 0.347): the targets are the model's own samples. A higher
 learning rate raises it (P3: 0.364 at step 25).
+
+**The LoRA rank (P4, rank 64 / alpha 128, lr 1e-4, 2026-10-21):** 34.6 / 33.2 / **33.5%** at steps 50 /
+100 / final (gretel 58.0%, SQaLe 30.2%, CypherBench 33.3%, text2cypher 7.3%; valid calls 94.0%), final
+validation loss 0.350 (P1: 0.347). More adapter capacity doesn't help at this data size: it peaks at
+step 50 and drifts down, as a larger adapter overfitting ~3,400 examples would. By the rule P1's rank 16
+stays for P5-P8. (Rank 64 trains ~25% slower here: ~11 steps a minute vs ~14.)
+
+**Paused before P5** at Rishi's request (2026-10-21 22:02): `D:\nfl-ml-data\ask\finetune\HOLD` makes
+`ask-trainer train` refuse new runs (exit 3), so the driver stopped when it tried to start P5 (no P5 run
+folder was made). To go on: delete the file, then `C:\Python314\python.exe scripts\pilot_sweep.py
+--traces pilot --after-round 0`; the driver skips P1-P4 and runs P5 (JEPA lambda 1, k 0) and P6 (JEPA
+lambda 0.5, k 1) at lr 1e-4, rank 16, then P7 / P8 (seed 7), then the trace run's second round.
