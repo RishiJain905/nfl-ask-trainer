@@ -160,6 +160,30 @@ The exec accuracy is unaffected (the evalset is a fixed 200, the same for every 
 fairly with each other. For the real run the subset gets a fixed seed of its own (changed after the
 sweep, not during it, so P7 and P8 use the same code).
 
+**P8 can't train while the PC is in use (2026-10-24).** Started at 16:32 with Rishi working on the PC, it
+froze twice at the same point, during step 8: `HSA exception: MemoryRegion::BlockAllocator::alloc
+failed.` in `pilot-p8.train.log`, the process spinning with no further steps. Both attempts are kept
+(`finetune\pilot-p8-failed-20261024`, `pilot-p8-failed2-20261024`). What we measured:
+
+- Windows' commit charge was at 47.5 of 49.1 GB (31 GB RAM + page file) when the first attempt froze, and
+  in the second, free RAM fell from 13.8 to 2.9 GB at step 8. Killing the frozen trainer gave back ~16 GB
+  of commit: on WSL the GPU memory PyTorch reserves (~14.8 GB with its cache) is backed by Windows commit,
+  so an allocation past what the card can hold spills into system RAM.
+- The step itself isn't unusual: P7 (same seed) peaked at 11.4 GB at step 8 and P5 (same JEPA) at 12.6 GB
+  overall. The difference is the room left around it: with the desktop in use (the compositor, Chrome and
+  the AMD software hold ~1.1 GB of VRAM) and an RLM job, a MySQL server and several Claude sessions also
+  running, there was ~1.6 GB of commit to spare. P1-P7 trained overnight with the PC idle, and even then
+  free RAM dipped to 0.5 GB.
+- `garbage_collection_threshold:0.6` (the second attempt) didn't help, and `expandable_segments` isn't
+  supported on WSL ("not supported on this platform"); neither is in the driver.
+
+So P8 runs when the PC is idle, and the trace run's second round (llama.cpp: a fixed ~7.6 GB of VRAM, little
+RAM) ran first, from 17:12. Started by hand with the driver's own `finish_traces()`, so the sweep's
+`status.json` shows `phase: traces-rest`. Run P8 only after the trace run has finished (a `DONE` event):
+started with `--after-round 0` while round 1 is still running, the driver would stop tracegen. **For the
+real run** (many hours): train with the PC idle, or free memory first; a larger page file would give the
+spill room instead of a crash.
+
 **Paused twice at Rishi's request** (he needed the PC): before P5 (2026-10-21 22:02 to 2026-10-22 19:56)
 and after P7 (2026-10-23 00:55 to 2026-10-24 16:32; P7 had finished training and all three scores). `D:\nfl-ml-data\ask\finetune\HOLD` makes `ask-trainer train`
 refuse new runs (exit 3), so the driver stops when it tries to start the next pilot (no run folder is

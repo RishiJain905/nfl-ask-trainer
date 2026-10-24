@@ -52,8 +52,11 @@ can write (rules: read `view`, write `admin`); the page itself never writes.
    `wsl -d Ubuntu -- bash scripts/dashboard_feed.sh <run> -- [--wandb]`
    (the W&B check every third tick or so). It prints one JSON line; when `tick_file` isn't null,
    push it: `ArtifactData set` on `runs/<run>/ticks`, doc `t<seq:05d>`, `file_path` = the tick
-   file (as a Windows path, `D:\nfl-ml-data\ask\finetune\<run>\dashboard\tick-NNNNN.json`); on a
-   run's first tick also `runs` / `<run>` from `run.json`.
+   file (as a Windows path, `D:\nfl-ml-data\ask\finetune\<run>\dashboard\tick-NNNNN.json`); when
+   the line's `run_doc` isn't null, also `runs` / `<run>` from `run.json`. The feed writes
+   `run.json` only once the trainer has written `config.json` and `run_info.json` (usually the
+   first or second tick); before that fix (2026-10-24) a tick in a run's first seconds sent a stub
+   with no config, as happened to pilot-p3 (repaired by hand).
 3. Read the printed status every tick: `stalled` (no step for 20 minutes while the process
    lives), `stopped` (the process is gone without `DONE`), a W&B mismatch, or a falling speed is
    reported to Rishi at once, with what the files say.

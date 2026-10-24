@@ -362,7 +362,10 @@ def main() -> None:
         return
 
     run_doc = None
-    if not state["run_doc"]:
+    # only once the trainer has written its config and run info: a tick before that would send
+    # a stub (no config, the objective guessed) that is never sent again
+    ready = (run / "config.json").exists() and (run / "run_info.json").exists()
+    if not state["run_doc"] and ready:
         run_doc = out / "run.json"
         first_ts = points[0][1] if points else None
         doc = {"run": run.name, "created_at": now_iso(),
@@ -385,7 +388,7 @@ def main() -> None:
         evals_sent=sorted(sent_evals | {e["step"] for e in new_evals}),
         scored_sent=sorted(scored_sent),
         events_sent=len(events), gpu_last=gpu[-1][0] if gpu else state["gpu_last"],
-        last_tick_at=tick["made_at"], run_doc=True,
+        last_tick_at=tick["made_at"], run_doc=state["run_doc"] or run_doc is not None,
     )  # fmt: skip
     (out / "state.json").write_text(json.dumps(state), encoding="utf-8")
     print(json.dumps({
