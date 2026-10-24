@@ -56,7 +56,10 @@ can write (rules: read `view`, write `admin`); the page itself never writes.
    the line's `run_doc` isn't null, also `runs` / `<run>` from `run.json`. The feed writes
    `run.json` only once the trainer has written `config.json` and `run_info.json` (usually the
    first or second tick); before that fix (2026-10-24) a tick in a run's first seconds sent a stub
-   with no config, as happened to pilot-p3 (repaired by hand).
+   with no config, as happened to pilot-p3 (repaired by hand). With every tick, also `update`
+   `runs` / `<run>` with `last_tick_at` = the tick's `made_at` (pinned to the doc's version): the
+   page lists runs by that, marks a run updated in the last 30 minutes "live", and opens on the
+   live run (since 2026-10-24; runs before that sort by their start).
 3. Read the printed status every tick: `stalled` (no step for 20 minutes while the process
    lives), `stopped` (the process is gone without `DONE`), a W&B mismatch, or a falling speed is
    reported to Rishi at once, with what the files say.

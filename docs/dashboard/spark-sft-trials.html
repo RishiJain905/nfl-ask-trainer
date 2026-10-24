@@ -684,17 +684,23 @@ td .u { color: var(--muted); font-size: 0.74rem; display: block; }
     if (!db) { document.getElementById("nodb").hidden = false; document.getElementById("run-picker").disabled = true; return; }
     var picker = document.getElementById("run-picker");
     picker.addEventListener("change", function () { pick(picker.value, db); });
+    // a run's last activity: its latest dashboard update (last_tick_at), else when it started
+    function activeAt(r) { return String(r.last_tick_at || r.started_at || r.created_at || ""); }
+    function isLive(r) { var t = Date.parse(r.last_tick_at || ""); return isFinite(t) && Date.now() - t < 30 * 60 * 1000; }
     db.collection("runs").onSnapshot(function (snap) {
       runs = {}; snap.docs.forEach(function (d) { runs[d.id] = d.data(); });
-      var names = Object.keys(runs).sort(function (a, b) { return String(runs[b].started_at || runs[b].created_at || "").localeCompare(String(runs[a].started_at || runs[a].created_at || "")); });
+      var names = Object.keys(runs).sort(function (a, b) { return activeAt(runs[b]).localeCompare(activeAt(runs[a])); });
       document.getElementById("empty").hidden = names.length > 0;
       document.getElementById("main").hidden = names.length === 0;
       picker.textContent = "";
-      names.forEach(function (n) { var o = el("option", { value: n }, n + (runs[n].kind === "trace" ? " · thinking traces" : runs[n].info && runs[n].info.objective ? " · " + runs[n].info.objective : "")); picker.appendChild(o); });
+      names.forEach(function (n) { var o = el("option", { value: n }, n + (runs[n].kind === "trace" ? " · thinking traces" : runs[n].info && runs[n].info.objective ? " · " + runs[n].info.objective : "") + (isLive(runs[n]) ? " · live" : "")); picker.appendChild(o); });
       if (!names.length) return;
       var saved = null; try { saved = localStorage.getItem("sft-trials-run"); } catch (e) {}
-      var want = current && runs[current] ? current : (saved && runs[saved] ? saved : names[0]);
-      picker.value = want; current = null; pick(want, db);
+      // on opening, a live run wins over the remembered one; after that the viewer's choice stays
+      var live = isLive(runs[names[0]]) ? names[0] : null;
+      var want = current && runs[current] ? current : (live || (saved && runs[saved] ? saved : names[0]));
+      picker.value = want;
+      if (want !== current) { current = null; pick(want, db); } else { latest.meta = runs[want]; schedule(); }
     }, function () { document.getElementById("nodb").hidden = false; });
   }
   if (window.claude && window.claude.use) start(); else document.getElementById("nodb").hidden = false;
