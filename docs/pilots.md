@@ -126,10 +126,43 @@ learning rate raises it (P3: 0.364 at step 25).
 100 / final (gretel 58.0%, SQaLe 30.2%, CypherBench 33.3%, text2cypher 7.3%; valid calls 94.0%), final
 validation loss 0.350 (P1: 0.347). More adapter capacity doesn't help at this data size: it peaks at
 step 50 and drifts down, as a larger adapter overfitting ~3,400 examples would. By the rule P1's rank 16
-stays for P5-P8. (Rank 64 trains ~25% slower here: ~11 steps a minute vs ~14.)
+stays for P5-P8. (Rank 64 trains ~25% slower here: ~49 s a step vs ~40.)
 
-**Paused before P5** at Rishi's request (2026-10-21 22:02): `D:\nfl-ml-data\ask\finetune\HOLD` makes
-`ask-trainer train` refuse new runs (exit 3), so the driver stopped when it tried to start P5 (no P5 run
-folder was made). To go on: delete the file, then `C:\Python314\python.exe scripts\pilot_sweep.py
---traces pilot --after-round 0`; the driver skips P1-P4 and runs P5 (JEPA lambda 1, k 0) and P6 (JEPA
-lambda 0.5, k 1) at lr 1e-4, rank 16, then P7 / P8 (seed 7), then the trace run's second round.
+**LLM-JEPA (P5, P6, lr 1e-4, rank 16, 2026-10-22):**
+
+| | P1 (plain) | P5 (JEPA λ 1, k 0) | P6 (JEPA λ 0.5, k 1) |
+|---|---|---|---|
+| all, step 50 / 100 / final | 33.2 / 34.8 / 35.0% | 36.2 / 35.5 / **36.3%** | 31.5 / 35.0 / 35.3% |
+| gretel (final) | 60.0% | 61.2% | 58.0% |
+| SQaLe | 34.9% | 40.0% | 34.9% |
+| CypherBench | 30.0% | 31.3% | 34.0% |
+| text2cypher | 10.0% | 9.5% | 9.8% |
+| valid calls | 96.5% | 94.5% | 96.0% |
+| validation loss, step 25 / final | 0.349 / 0.347 | 0.370 / 0.349 | 0.355 / 0.348 |
+
+By the rule P5 is the better JEPA setting (36.3% vs 35.3%), so P8 repeats it at seed 7. P5 is also
+the best pilot so far, 1.3 points over P1: beyond the half-point band, but inside the noise, which is
+what P7 / P8 measure. The JEPA term costs validation loss early (P5: 0.370 at step 25 against P1's
+0.349, the embedding loss pulling against the next-token loss at full weight) and is almost gone by the
+end; its own value falls to ~0.002. A JEPA step takes ~44 s against ~40 s plain.
+
+**Seed noise, plain (P7 = P1 at seed 7, 2026-10-23):** 33.3 / 33.5 / **35.2%** at steps 50 / 100 / final
+(gretel 60.0%, SQaLe 33.3%, CypherBench 31.2%, text2cypher 10.3%; valid calls 96.0%) against P1's 33.1 /
+34.8 / 35.0%. The seed moves the final score by 0.2 points (1.3 at step 100), far less than the ~3.5-point
+sampling error of a 200-question evalset suggested: the evalset is the same for both, so what changes is
+only the training order and the adapter's start. One pair isn't a noise estimate on its own; P8 (P5 at
+seed 7) is the second.
+
+**Validation loss isn't comparable across seeds.** `train.py` picks the 200 validation-loss examples
+(of 379) with `stratified_subset(..., cfg.seed)`, so P7 / P8 (seed 7) measure their loss on a different
+200 than P1-P6 (seed 42): P7's step-25 loss is 0.329 against P1's 0.349, from the subset, not the model.
+The exec accuracy is unaffected (the evalset is a fixed 200, the same for every run), and P7 vs P8 compare
+fairly with each other. For the real run the subset gets a fixed seed of its own (changed after the
+sweep, not during it, so P7 and P8 use the same code).
+
+**Paused twice at Rishi's request** (he needed the PC): before P5 (2026-10-21 22:02 to 2026-10-22 19:56)
+and after P7 (2026-10-23 00:55 to 2026-10-24 16:32; P7 had finished training and all three scores). `D:\nfl-ml-data\ask\finetune\HOLD` makes `ask-trainer train`
+refuse new runs (exit 3), so the driver stops when it tries to start the next pilot (no run folder is
+made) and writes `phase: paused` to `status.json`. To go on: delete the file, start the trainer's Neo4j
+(`docker start asktrainer-neo4j`), then `C:\Python314\python.exe scripts\pilot_sweep.py --traces pilot
+--after-round 0`; the driver skips the finished pilots, runs the rest, then the trace run's second round.
