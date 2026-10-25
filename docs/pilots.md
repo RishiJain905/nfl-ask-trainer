@@ -87,7 +87,10 @@ model's, the decisions), `status.json` (what runs now), `configs/pilot-pN.yaml` 
 config), `pilot-pN.train.log`, `base/` (the base model's answers and scores). Each pilot is an
 ordinary training run in `D:\nfl-ml-data\ask\finetune\pilot-pN\` (W&B, dashboard), with its
 `adapter_step000050/`, `adapter_step000100/`, `adapter/`, and its `preds_llamacpp_*.jsonl` /
-`scores_llamacpp_*.json`.
+`scores_llamacpp_*.json`. **P1-P6's adapters were deleted on 2026-10-25** at Rishi's request (12 GB:
+the four adapter folders, the three LoRA GGUFs in `llamacpp\lora\`, the two step checkpoints in
+`F:\nfl-ask-trainer-ckpt\`); their answers, scores, logs and W&B runs (with the adapter artifacts
+logged after each epoch) stay. P7 and P8 keep everything.
 
 **Started early (Rishi, 2026-10-21 13:45):** the pilots train on the trace run's **first round**
 only (each question's first try), with `--after-round 0`: the driver stops `tracegen` once round 1
