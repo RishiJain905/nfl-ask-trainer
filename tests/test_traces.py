@@ -87,6 +87,46 @@ def test_empty_results_everywhere_are_unverified():
     assert qc.check_sql(gold, gold, SCHEMA, real_rows=False)["checked_by"] == "exact"
 
 
+def test_near_miss_copies_catch_starts_with_for_contains():
+    # a real trace answer that version 3 passed: "starts with" for the reference's "contains"
+    schema = "CREATE TABLE tweets (id INT, user_id INT, content TEXT, retweets INT, hashtags TEXT);"
+    gold = "SELECT MAX(retweets) FROM tweets WHERE hashtags LIKE '%#zerowaste%'"
+    pred = "SELECT MAX(retweets) AS max_retweets FROM tweets WHERE hashtags LIKE '#zerowaste%'"
+    assert qc.check_sql(pred, gold, schema, real_rows=False, version=3)["verdict"] == "pass"
+    r = qc.check_sql(pred, gold, schema, real_rows=False)
+    assert r["verdict"] == "fail" and r["reason"] == "near_miss_rows_differ"
+    alias = "SELECT MAX(t.retweets) FROM tweets AS t WHERE t.hashtags LIKE '%#zerowaste%'"
+    assert qc.check_sql(alias, gold, schema, real_rows=False)["verdict"] == "pass"
+    assert "x #zerowaste" in qc.near_misses(["#zerowaste"])
+
+
+def test_a_tie_at_the_answers_limit_counts_neither_way():
+    # SQLite's bare column with MAX picks one of the tied rows; LIMIT 1 may pick another
+    schema = "CREATE TABLE worker_scores (worker_id INTEGER, score INTEGER);"
+    gold = "SELECT worker_id, MAX(score) FROM worker_scores"
+    pred = "SELECT worker_id, score FROM worker_scores ORDER BY score DESC, worker_id LIMIT 1"
+    assert qc.check_sql(pred, gold, schema, real_rows=False)["verdict"] == "pass"
+    wrong = "SELECT worker_id, score FROM worker_scores ORDER BY score ASC, worker_id LIMIT 1"
+    assert qc.check_sql(wrong, gold, schema, real_rows=False)["verdict"] == "fail"
+
+
+def test_only_nulls_and_zeros_are_no_evidence():
+    gold = "SELECT MAX(home_score) FROM games WHERE season = 1999 AND season = 2000"
+    other = "SELECT MAX(home_score) FROM games WHERE 1 = 0"  # (NULL,) as well, by accident
+    assert qc.check_sql(other, gold, SCHEMA, real_rows=False, version=3)["verdict"] == "pass"
+    assert qc.check_sql(other, gold, SCHEMA, real_rows=False)["verdict"] == "unverified"
+
+
+def test_rescue_copies_verify_a_narrow_filter():
+    schema = "CREATE TABLE orders (id INTEGER PRIMARY KEY, country TEXT, year INT, status TEXT);"
+    gold = "SELECT id FROM orders WHERE country = 'Peru' AND year > 2020 AND status = 'active'"
+    same = "SELECT id FROM orders WHERE status = 'active' AND country = 'Peru' AND year >= 2021"
+    looser = "SELECT id FROM orders WHERE status = 'active' AND country = 'Peru' AND year >= 2020"
+    r = qc.check_sql(same, gold, schema, real_rows=False)
+    assert r["verdict"] == "pass" and r["fuzz_informative"] >= 1
+    assert qc.check_sql(looser, gold, schema, real_rows=False)["verdict"] == "fail"
+
+
 def test_cypher_is_exact_or_unverified():
     gold = (
         "MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p.name, count(m) AS n "

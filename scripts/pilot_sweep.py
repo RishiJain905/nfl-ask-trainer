@@ -43,6 +43,9 @@ EVAL_PORT = 8092
 TRACE_PORT = 8090
 BUDGET = 1024
 TIE = 0.005  # exec accuracies this close count as a tie
+# every pilot is scored with the checking rules P1-P7 were scored with (querycheck version 3),
+# so the sweep compares like with like; version 4 (near-miss and rescue copies) came after P7
+SCORE_CHECKER = 3
 # captured output is UTF-8 (WSL, progress bars, W&B's emoji), never the console code page
 TEXT = {"text": True, "encoding": "utf-8", "errors": "replace"}
 
@@ -318,11 +321,13 @@ class Sweep:
         finally:
             if started:
                 self.serve(port, stop=True)
+        chk = f"--checker {SCORE_CHECKER}"
         if run is None:
-            r = self.wsl(f"ask-trainer evalrun --preds {_wsl(preds)} --tag {tag} --step 0")
+            r = self.wsl(f"ask-trainer evalrun --preds {_wsl(preds)} --tag {tag} --step 0 {chk}")
         else:
             r = self.wsl(
-                f"ask-trainer evalrun --run {run} --preds {_wsl(preds)} --tag {tag} --step {step}"
+                f"ask-trainer evalrun --run {run} --preds {_wsl(preds)} --tag {tag} "
+                f"--step {step} {chk}"
             )
         if r.returncode != 0:
             raise RuntimeError(f"scoring {run or 'base'} {tag} failed: {r.stderr[-600:]}")

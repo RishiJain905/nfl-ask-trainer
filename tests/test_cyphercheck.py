@@ -103,6 +103,32 @@ def test_informative_rows():
     assert cc._informative([(0, "x")]) and cc._informative([((1, 2),)])
 
 
+def test_near_miss_graphs_plant_values_around_the_literal():
+    lits = cc.literals(["MATCH (p:Product) WHERE p.productName CONTAINS 'Chai' RETURN p"])
+    nodes, _, _ = cc.fuzz_graph(cc.parse_schema(SYSTEM), 61, lits, variants=True)
+    names = {n.get("productName") for n in nodes["Product"]}
+    assert names & {"x Chai", "Chai x", "x Chai x", "CHAI", "chai", "hai", "Cha"}
+    plain, _, _ = cc.fuzz_graph(cc.parse_schema(SYSTEM), 61, lits)
+    assert "x Chai" not in {n.get("productName") for n in plain["Product"]}
+
+
+def test_which_answers_a_recheck_redoes():
+    sql = {"dialect": "sqlite", "origin": "sqale"}
+    assert cc._due({**sql, "verdict": "pass", "checked_by": "fuzz"}, None)  # version 3's pass
+    assert not cc._due({**sql, "verdict": "pass", "checked_by": "fuzz", "checker": 4}, None)
+    assert not cc._due({**sql, "verdict": "fail", "reason": "fuzz_rows_differ"}, None)
+    assert not cc._due({**sql, "verdict": "pass", "checked_by": "exact"}, None)
+    t2c = {"dialect": "cypher", "origin": "text2cypher"}
+    assert cc._due({**t2c, "verdict": "unverified", "reason": "no_graph"}, None)
+    assert not cc._due({**t2c, "verdict": "fail", "reason": "syntax:write"}, None)
+    assert cc._due(t2c, {"verdict": "pass", "checked_by": "fuzz_graph", "checker": 3})
+    assert not cc._due(t2c, {"verdict": "pass", "checked_by": "fuzz_graph", "checker": 4})
+    assert not cc._due(t2c, {"verdict": "fail", "reason": "fuzz_rows_differ", "checker": 3})
+    cb = {"dialect": "cypher", "origin": "cypherbench"}
+    assert not cc._due(cb, {"verdict": "pass", "checked_by": "graph", "checker": 3})
+    assert cc._due({**cb, "verdict": "unverified", "reason": "no_graph"}, None)
+
+
 DB = cc.Neo4j()
 neo4j = pytest.mark.skipif(not DB.ok(), reason="no local Neo4j on 127.0.0.1:7476")
 
@@ -131,6 +157,15 @@ def test_fuzz_check_passes_rewrites_and_fails_wrong_answers():
     assert res[3]["verdict"] == "fail" and res[3]["reason"] == "fuzz_rows_differ"
     assert res[4]["verdict"] == "fail" and "SyntaxError" in res[4]["reason"]
     assert res[5]["verdict"] == "fail" and res[5]["reason"] == "syntax:write"
+
+
+@neo4j
+def test_near_miss_graphs_catch_starts_with_for_contains():
+    gold = "MATCH (p:Product) WHERE p.productName CONTAINS 'Chai' RETURN p.productName AS n"
+    pred = "MATCH (p:Product) WHERE p.productName STARTS WITH 'Chai' RETURN p.productName AS n"
+    assert cc.check_fuzz(DB, SYSTEM, gold, [pred], version=3)[0]["verdict"] == "pass"
+    r = cc.check_fuzz(DB, SYSTEM, gold, [pred])[0]
+    assert r["verdict"] == "fail" and r["reason"] == "near_miss_rows_differ"
 
 
 @neo4j

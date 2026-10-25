@@ -17,6 +17,11 @@ answer to `<run>/rechecks.jsonl` (the export and `tracegen`'s next round read it
   literals planted in the properties they're compared with (`checked_by` fuzz_graph); a sorted
   gold is also checked for order on a graph with (almost) no ties.
 A run where the gold returns nothing, or only zeros and nulls, proves nothing: unverified.
+Version 4 (`querycheck.CHECKER_VERSION`, 2026-10-24) adds, for text2cypher, near-miss graphs
+(`VARIANT_SEEDS`: planted values around the literals, so `STARTS WITH` against `CONTAINS` or
+`=` against `=~` return different rows) and rescue graphs (`RESCUE_SEEDS`, literals planted far
+more often), tried only while no graph gave evidence; `check_fuzz(..., version=3)` keeps the
+old rules. CypherBench's real graphs are the same under both.
 """
 
 from __future__ import annotations
@@ -32,14 +37,18 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from asktrainer.querycheck import (
+from asktrainer.querycheck import (  # noqa: F401  (CHECKER_VERSION, _informative re-exported)
+    CHECKER_VERSION,
     NUM_LITERAL,
     STRINGS,
+    _date_neighbours,
+    _informative,
     _norm_value,
     align,
     check_sql,
     contained_in,
     cypher_ok,
+    near_misses,
     normalise,
     same_results,
 )
@@ -52,13 +61,11 @@ CYPHERBENCH = (  # the downloaded benchmark (scripts/download_benchmarks.py), Wi
 )
 FUZZ_SEEDS = (11, 23, 37)
 ORDER_SEED = 53
+VARIANT_SEEDS = (61, 67)  # near-miss graphs (version 4, `querycheck.CHECKER_VERSION`)
+RESCUE_SEEDS = tuple(range(101, 109))  # tried only while no graph gave evidence
 NODES_PER_LABEL = 14
 RELS_PER_PATTERN = 40  # end nodes skewed: a few nodes get many ("at least 6 reviews")
 MAX_ROWS = 10_000
-# the checking rules' version: a re-check redoes the answers an older version didn't pass
-# (2: the same columns in another order count; names, titles and ids unique per node;
-# 3: denser relationships with skewed end nodes)
-CHECKER_VERSION = 3
 
 
 class CypherError(Exception):
@@ -289,14 +296,23 @@ WORDS = ("alpha", "beta", "gamma", "delta", "omega")
 
 
 def fuzz_graph(
-    schema: dict[str, Any], seed: int, lits: dict[str, Any], distinct: bool = False
+    schema: dict[str, Any],
+    seed: int,
+    lits: dict[str, Any],
+    distinct: bool = False,
+    variants: bool = False,
+    plant_p: float = 0.5,
 ) -> tuple[dict[str, list[dict[str, Any]]], list[tuple], dict[str, dict[str, str]]]:
     """Random nodes and relationships for the schema (inputs for `load`). Properties a query
-    compares with a literal get that literal often; the other text and numbers come from small
-    pools so joins and groups repeat. `distinct`: wide ranges and unique text (no ties)."""
+    compares with a literal get that literal often (`plant_p`); the other text and numbers come
+    from small pools so joins and groups repeat. `distinct`: wide ranges and unique text (no
+    ties). `variants`: planted text sits around the literal (`querycheck.near_misses`) and
+    planted dates a year either side, instead of the literal alone."""
     rnd = random.Random(seed)
     by_prop, strs, nums = lits["by_prop"], lits["strs"], lits["nums"]
     text_pool = list(strs) + list(WORDS)
+    if variants:
+        text_pool = near_misses(list(strs)) + list(WORDS[:2])
     int_pool = [int(n) for n in nums if n == int(n) and abs(n) < 10**9]
     real_pool = [n for n in nums if abs(n) < 10**9]
 
@@ -311,7 +327,7 @@ def fuzz_graph(
 
     def number(kind: str, prop: str) -> Any:
         planted = [v for v in by_prop.get(prop, []) if isinstance(v, (int, float))]
-        if planted and rnd.random() < 0.5:
+        if planted and rnd.random() < plant_p:
             base = rnd.choice(planted)
             v = base + rnd.choice((-1, 0, 0, 1)) * (1 if kind == "INTEGER" else rnd.random())
         elif kind == "INTEGER":
@@ -338,8 +354,8 @@ def fuzz_graph(
             return rnd.random() < 0.5 if not planted else rnd.choice([True, False])
         if kind in ("DATE", "DATE_TIME", "LOCAL_DATE_TIME"):
             planted = [v for v in by_prop.get(prop, []) if isinstance(v, str) and DATE_RE.match(v)]
-            if planted and rnd.random() < 0.5:
-                v = rnd.choice(planted)[:10]
+            if planted and rnd.random() < plant_p:
+                v = rnd.choice(_date_neighbours(planted) if variants else planted)[:10]
                 return v + ("T12:00:00" if kind != "DATE" else "")
             return date(kind != "DATE")
         if kind == "LIST":
@@ -348,8 +364,9 @@ def fuzz_graph(
         if kind == "POINT":
             return None
         planted = by_prop.get(prop, [])
-        if planted and rnd.random() < 0.5:
-            return str(rnd.choice(planted))
+        if planted and rnd.random() < plant_p:
+            around = near_misses([v for v in planted if isinstance(v, str)]) if variants else []
+            return str(rnd.choice(around or planted))
         if distinct and rnd.random() < 0.8:
             return f"v{rnd.randrange(10**9):09d}"
         if any(isinstance(v, (int, float)) for v in planted):  # a number kept as text
@@ -464,15 +481,6 @@ def _sort_key_column(q: str, names: list[str]) -> int | None:
     return tails.index(base) if tails.count(base) == 1 else None
 
 
-def _informative(rows: list[tuple]) -> bool:
-    """Rows that say something: not empty, not only zeros, nulls and empty lists."""
-    for r in rows:
-        for v in r:
-            if v not in (None, 0, 0.0, (), "", False):
-                return True
-    return False
-
-
 def _tie(db: Neo4j, gold: str, g: list[tuple], p: list[tuple]) -> bool:
     unl = strip_limit(gold)
     if unl is None or len(p) != len(g) or not g:
@@ -502,9 +510,12 @@ def _ordered_equal(gold: list[tuple], pred: list[tuple]) -> bool:
     )
 
 
-def compare(db: Neo4j, gold: str, preds: list[str]) -> list[dict[str, Any]]:
+def compare(
+    db: Neo4j, gold: str, preds: list[str], both_ways: bool = False
+) -> list[dict[str, Any]]:
     """Run gold and each prediction on the loaded graph: per prediction one of
-    match | tie | differ | pred_error:<code> | gold_error | uninformative."""
+    match | tie | differ | pred_error:<code> | gold_error | uninformative. `both_ways` (version
+    4): a tie at the prediction's own final LIMIT also counts as a tie."""
     try:
         _, g = db.run(gold)
     except Exception as e:
@@ -525,7 +536,7 @@ def compare(db: Neo4j, gold: str, preds: list[str]) -> list[dict[str, Any]]:
             if moved is not p:
                 o["columns_moved"] = True
             out.append(o)
-        elif _tie(db, gold, g, p):
+        elif _tie(db, gold, g, p) or (both_ways and _tie(db, q, p, g)):
             out.append({"outcome": "tie"})
         else:
             out.append({"outcome": "differ", "gold_rows": len(g), "pred_rows": len(p)})
@@ -560,8 +571,12 @@ def _guard(q: str) -> str | None:
     return None if ok else f"syntax:{why}"
 
 
-def check_fuzz(db: Neo4j, system: str, gold: str, preds: list[str]) -> list[dict[str, Any]]:
-    """text2cypher: each prediction against the gold on random graphs from the schema."""
+def check_fuzz(
+    db: Neo4j, system: str, gold: str, preds: list[str], version: int = CHECKER_VERSION
+) -> list[dict[str, Any]]:
+    """text2cypher: each prediction against the gold on random graphs from the schema.
+    `version`: the checking rules (`querycheck.CHECKER_VERSION`); 3 is the rules before the
+    near-miss and rescue graphs."""
     schema = parse_schema(system)
     res = [
         {"verdict": None, "checked_by": "", "reason": "", "fuzz_agree": 0, "fuzz_informative": 0}
@@ -581,36 +596,61 @@ def check_fuzz(db: Neo4j, system: str, gold: str, preds: list[str]) -> list[dict
         return res
     lits = literals([gold] + [preds[i] for i in todo])
     ties = dict.fromkeys(todo, 0)
-    gold_errors = 0
-    for seed in FUZZ_SEEDS:
-        if not todo:
-            break
-        nodes, rels, types = fuzz_graph(schema, seed, lits)
+    tried = gold_errors = 0
+    differ = {"fuzz": "fuzz_rows_differ", "near_miss": "near_miss_rows_differ",
+              "rescue": "rescue_rows_differ"}  # fmt: skip
+
+    def on_graph(spec: dict[str, Any], which: list[int], kind: str) -> bool:
+        """Load one random graph and compare `which` on it; False when it didn't load."""
+        nonlocal tried, gold_errors
+        nodes, rels, types = fuzz_graph(schema, lits=lits, **spec)
         try:
             load(db, nodes, rels, types)
         except Exception as e:
-            for i in todo:
-                res[i].update(verdict="unverified", reason=f"load_failed:{str(e)[:60]}")
-            return res
-        outs = compare(db, gold, [preds[i] for i in todo])
+            for r in res:  # every answer not decided yet
+                if r["verdict"] is None:
+                    r.update(verdict="unverified", reason=f"load_failed:{str(e)[:60]}")
+            return False
+        tried += 1
+        outs = compare(db, gold, [preds[i] for i in which], both_ways=version >= 4)
         if outs and outs[0]["outcome"] == "gold_error":
             gold_errors += 1
-            continue
-        still = []
-        for i, o in zip(todo, outs, strict=True):
+            return True
+        for i, o in zip(which, outs, strict=True):
             k = o["outcome"]
             if k == "match":
                 res[i]["fuzz_agree"] += 1
                 res[i]["fuzz_informative"] += 1
+                if kind == "rescue":
+                    res[i]["rescued"] = True
             elif k == "uninformative":
                 res[i]["fuzz_agree"] += 1
             elif k == "tie":
                 ties[i] += 1
             else:
-                res[i].update(verdict="fail", reason="fuzz_rows_differ" if k == "differ" else k)
-                continue
-            still.append(i)
-        todo = still
+                res[i].update(verdict="fail", reason=differ[kind] if k == "differ" else k)
+        return True
+
+    graphs: list[tuple[dict[str, Any], str]] = [({"seed": s}, "fuzz") for s in FUZZ_SEEDS]
+    if version >= 4:
+        graphs += [({"seed": s, "variants": True}, "near_miss") for s in VARIANT_SEEDS]
+    for spec, kind in graphs:
+        todo = [i for i in todo if res[i]["verdict"] is None]
+        if not todo:
+            break
+        if not on_graph(spec, todo, kind):
+            return res
+    todo = [i for i in todo if res[i]["verdict"] is None]
+    if version >= 4:  # rescue: the answers no graph gave evidence for, until two graphs do
+        need = [i for i in todo if not res[i]["fuzz_informative"]]
+        for n, seed in enumerate(RESCUE_SEEDS):
+            need = [i for i in need if res[i]["verdict"] is None and res[i]["fuzz_informative"] < 2]
+            if not need:
+                break
+            spec = {"seed": seed, "plant_p": 0.85, "variants": n % 2 == 1}
+            if not on_graph(spec, need, "rescue"):
+                return res
+        todo = [i for i in todo if res[i]["verdict"] is None]
     sorted_gold = sorts_result(gold)
     proven = [i for i in todo if res[i]["fuzz_informative"]]
     if proven and sorted_gold:
@@ -633,7 +673,7 @@ def check_fuzz(db: Neo4j, system: str, gold: str, preds: list[str]) -> list[dict
             res[i].update(verdict="pass", checked_by="fuzz_graph", reason="match")
         else:
             why = "ties_only" if ties[i] else "no_rows_returned"
-            if gold_errors == len(FUZZ_SEEDS):
+            if tried and gold_errors == tried:
                 why = "gold_error"
             res[i].update(verdict="unverified", reason=why)
     return res
@@ -726,25 +766,41 @@ def _lines(p: Path) -> list[dict[str, Any]]:
     return out
 
 
+def _due(r: dict[str, Any], rec: dict[str, Any] | None) -> bool:
+    """Does an answer need checking under the current rules? `rec`: its latest re-check record
+    (None: only `tracegen`'s own check, which can't run Cypher and, before version 4, didn't
+    record its version: 3). Passes and unverified answers are redone by a newer version (it may
+    find a near-miss or rescue an answer); a found difference stays a fail."""
+    cur = rec or r
+    verdict, why = cur.get("verdict"), str(cur.get("reason") or "")
+    if cur.get("checked_by") == "exact" or why.startswith("syntax"):
+        return False  # the gold's own text, or not a query: no rule changes that
+    if r.get("dialect") != "cypher":
+        ver = rec.get("checker", 1) if rec else r.get("checker", 3)
+        return ver < CHECKER_VERSION and verdict in ("pass", "unverified")
+    if rec is None:
+        return True  # never run on a graph
+    if r.get("origin") == "cypherbench":  # the real graph: the same under versions 3 and 4
+        return rec.get("checker", 1) < 3 and verdict != "pass"
+    return rec.get("checker", 1) < CHECKER_VERSION and verdict in ("pass", "unverified")
+
+
 def recheck(run_dir: Path, db: Neo4j, root: Path = CYPHERBENCH, log=print) -> dict[str, int]:
     questions = {q["qid"]: q for q in _lines(run_dir / "questions.jsonl")}
-    done = {
-        r["rid"]
-        for r in _lines(run_dir / "rechecks.jsonl")
-        if r.get("checker", 1) >= CHECKER_VERSION or r.get("verdict") == "pass"
-    }
+    latest: dict[str, dict[str, Any]] = {}
+    for rec in _lines(run_dir / "rechecks.jsonl"):
+        latest[rec["rid"]] = rec  # the last record per answer wins
     todo: dict[str, list[dict[str, Any]]] = {}
     sql: list[dict[str, Any]] = []
+    before: dict[str, str | None] = {}
     for r in _lines(run_dir / "results.jsonl"):
-        if not r.get("query") or r["rid"] in done or r.get("verdict") == "pass":
+        if not r.get("query") or not _due(r, latest.get(r["rid"])):
             continue
+        before[r["rid"]] = (latest.get(r["rid"]) or r).get("verdict")
         if r.get("dialect") != "cypher":
-            if r.get("reason") in ("rows_differ", "fuzz_rows_differ", "order_differs"):
-                sql.append(r)  # the column-order rule (version 2) may pass it now
-            continue
-        if str(r.get("reason", "")).startswith("syntax"):
-            continue
-        todo.setdefault(r["qid"], []).append(r)
+            sql.append(r)
+        else:
+            todo.setdefault(r["qid"], []).append(r)
     counts: dict[str, int] = {}
     out_path = run_dir / "rechecks.jsonl"
 
@@ -755,11 +811,15 @@ def recheck(run_dir: Path, db: Neo4j, root: Path = CYPHERBENCH, log=print) -> di
                 rec["checker"] = CHECKER_VERSION
                 rec["ts"] = time.strftime("%Y-%m-%dT%H:%M:%S")
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-                counts[f"{r['origin']}/{v['verdict']}"] = (
-                    counts.get(f"{r['origin']}/{v['verdict']}", 0) + 1
-                )
+                key = f"{r['origin']}/{v['verdict']}"
+                counts[key] = counts.get(key, 0) + 1
+                old = before.get(r["rid"])
+                if old not in (None, v["verdict"]):  # what the newer rules changed
+                    move = f"{r['origin']}/{old}->{v['verdict']}"
+                    counts[move] = counts.get(move, 0) + 1
 
-    for r in sql:
+    keep = ("verdict", "checked_by", "reason", "rescued")
+    for n, r in enumerate(sql, 1):
         q = questions[r["qid"]]
         try:
             v = check_sql(r["query"], q["gold"], q.get("schema_script"), bool(q.get("real_rows")))
@@ -769,9 +829,11 @@ def recheck(run_dir: Path, db: Neo4j, root: Path = CYPHERBENCH, log=print) -> di
                 "checked_by": "",
                 "reason": f"check_error:{type(e).__name__}",
             }
-        write([r], [{k: v[k] for k in ("verdict", "checked_by", "reason")}])
+        write([r], [{k: v[k] for k in keep if k in v}])
+        if n % 1000 == 0:
+            log(f"sql {n} of {len(sql)}")
     if sql:
-        log(f"sql: re-ran {len(sql)} failed answers with the column-order rule")
+        log(f"sql: re-checked {len(sql)} answers (checker version {CHECKER_VERSION})")
     cb: dict[str, list[str]] = {}
     for qid, rows in todo.items():
         if rows[0]["origin"] == "cypherbench":
@@ -787,7 +849,8 @@ def recheck(run_dir: Path, db: Neo4j, root: Path = CYPHERBENCH, log=print) -> di
     t0 = time.time()
     for n, qid in enumerate(t2, 1):
         rows, q = todo[qid], questions[qid]
-        write(rows, check_fuzz(db, q["system"], q["gold"], [r["query"] for r in rows]))
+        res = check_fuzz(db, q["system"], q["gold"], [r["query"] for r in rows])
+        write(rows, [{k: v[k] for k in keep if k in v} for v in res])
         if n % 200 == 0:
             log(f"text2cypher {n} of {len(t2)} ({(time.time() - t0) / n:.2f}s each)")
     db.wipe()

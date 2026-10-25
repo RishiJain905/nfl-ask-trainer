@@ -41,7 +41,8 @@ Then:
   - on **four randomly filled copies of the schema** (Spider's test-suite idea, Zhong, Yu and
     Klein 2020): small integer ranges so joins and groups line up, the queries' own literals
     mixed into the value pools, a few NULLs, foreign keys picked from the referenced rows. A copy
-    where the reference returns nothing proves nothing and isn't counted.
+    where the reference returns nothing (since version 4: or only zeros and NULLs) proves nothing
+    and isn't counted. Version 4 adds near-miss copies and, when needed, rescue copies (below).
   - When the reference sorts its final result, one more copy with distinct values (where ties
     are rare) must return the rows **in the same order**.
   - **Ties at a LIMIT** (`ORDER BY wins DESC LIMIT 1` with two teams level) count neither way:
@@ -95,16 +96,60 @@ part of the logic, not the answer's order).
   of the rest are the dataset's generated "is there a path between X and Y" questions whose
   prompts list no relationships at all, which no schema-built graph can answer (unverified).
 
-The rules have a version (`CHECKER_VERSION`, now 3); a re-check redoes the answers an older
-version didn't pass. Measured on the pilot run's first 1,800 answers: of text2cypher's re-checked
+The rules have a version (`querycheck.CHECKER_VERSION`, now 4, shared by both checkers); a
+re-check redoes what an older version decided (version 4 below). Measured on the pilot run's first 1,800 answers: of text2cypher's re-checked
 answers 15% pass, 75% fail (half are real Cypher syntax errors such as SQL's `GROUP BY`, the
 rest return different rows), 10% unverified; CypherBench 27% pass.
 
 A re-check of a whole run (`python -m asktrainer.cyphercheck recheck --run <dir> [--every 1800]`,
 Windows) appends one line per answer to `rechecks.jsonl`; the export, the dashboard feed and
-`tracegen`'s next round read it over the first verdict (the last line per answer wins). It also
-re-runs SQL answers that failed under an older SQL rule (the column-order rule came after the
-pilot run started).
+`tracegen`'s next round read it over the first verdict (the last line per answer wins). Which
+answers it redoes (`cyphercheck._due`): those never run on a graph, and passes and unverified
+answers decided by an older version; a found difference stays a fail, and an exact match or a
+syntax error can't change.
+
+### Version 4: near-miss and rescue copies (2026-10-24)
+
+Approved by Rishi after this answer passed: Spark wrote `... WHERE hashtags LIKE '#zerowaste%'`
+("starts with") for the reference's `LIKE '%#zerowaste%'` ("contains"). On a tweet tagged
+`#eco #zerowaste` they disagree, but the filled copies only ever held exactly `#zerowaste` or the
+filler words, so both returned the same rows four times. Version 4, for SQL and for text2cypher's
+graphs:
+
+- **Near-miss copies** (`VARIANT_SEEDS`, two more copies or graphs on every check): text values
+  around each literal (`querycheck.near_misses`: `x #zerowaste`, `#zerowaste x`, `x #zerowaste
+  x`, `#ZEROWASTE`, `zerowaste`, `#zerowast`), numbers ±1 and dates a year either side, so
+  "starts with" against "contains", `=` against `LIKE`, `>` against `>=` or `Year = 2022` against
+  `Year = (SELECT MAX(Year) ...)` return different rows (reason `near_miss_rows_differ`).
+- **Rescue copies** (`RESCUE_SEEDS`: 12 SQL copies with 60 rows, 8 graphs), tried only when no
+  other copy gave evidence, until two do: literals in ~70% of the values (85% planted in graphs),
+  numbers and dates next to them, every other copy with the near-miss values. For a reference like
+  `WHERE country = 'Peru' AND year > 2020 AND status = 'active'`, which three random copies rarely
+  satisfy at once (reason `rescue_rows_differ` when the answer then differs; `rescued` on a pass).
+- **No evidence from zeros and NULLs** in SQL too (as Cypher already had): a `MAX` over no
+  matching rows is `(NULL,)` and used to count.
+- **Ties both ways**: a tie at the *answer's* `LIMIT` counts neither way, like one at the
+  reference's (`SELECT worker_id, MAX(score)` against `ORDER BY score DESC, worker_id LIMIT 1`:
+  SQLite's bare column and the `LIMIT` can pick different tied rows). Found in the first
+  version-4 re-check, where the denser near-miss values made such ties common; fixed before the
+  re-check that counts.
+- `check_sql(..., version=3)` / `check_fuzz(..., version=3)` keep the old rules, and
+  `ask-trainer evalrun --checker 3` scores with them: the pilot sweep scores every pilot with 3
+  (`scripts/pilot_sweep.py: SCORE_CHECKER`), so P8 stays comparable with P1-P7.
+
+The re-check of the pilot trace run under version 4 (2026-10-24 evening, the run's round 1 still
+going; `rechecks.before-v4.jsonl` is the file before it):
+
+| SQL | Re-checked | Pass | Fail | Unverified |
+|---|---|---|---|---|
+| were passes (not exact) | 3,172 | 3,070 | 85 (2.7%) | 17 (only zeros / NULLs) |
+| were unverified | 578 | 114 (62 rescued) | 157 | 307 |
+
+Samples of the new fails read as real mistakes: the starts-with / contains slips, `= 'CBT'` for
+`LIKE '%CBT%'` and back, `DISTINCT` against duplicates, `JOIN` for the reference's `LEFT JOIN`,
+an extra `IS NOT NULL`, joins that multiply rows, a `Year = (SELECT MAX(Year))` for `Year =
+2022`. The rule stays the reference's: `= 'Canada'` against `LIKE '%Canada%'` fails even where a
+reader might accept either.
 
 ## Files of a run (`D:\nfl-ml-data\ask\traces\<run>\`)
 

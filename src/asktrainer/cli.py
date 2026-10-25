@@ -216,7 +216,8 @@ def evalrun_cmd(args) -> int:
         for x in Path(args.preds).read_text(encoding="utf-8").splitlines()
         if x.strip()
     ]
-    res = publiceval.verify(exs, preds, publiceval.PublicData(paths.public))
+    checker = args.checker or publiceval.CHECKER_VERSION
+    res = publiceval.verify(exs, preds, publiceval.PublicData(paths.public), checker=checker)
     res["tag"], res["step"], res["preds"] = args.tag, args.step, str(args.preds)
     out = (run or Path(args.preds).parent) / f"scores_llamacpp_{args.tag}.json"
     out.write_text(json.dumps(res, indent=1, default=str), encoding="utf-8")
@@ -341,6 +342,9 @@ def main(argv: list[str] | None = None) -> int:
     ev.add_argument("--step", type=int, required=True, help="the training step of the adapter")
     ev.add_argument("--examples", default=None, help="default: <training>/public/evalset")
     ev.add_argument("--no-wandb", action="store_true")
+    ev.add_argument("--checker", type=int, default=None,
+                    help="the checking rules' version (default: the current one; the pilot "
+                    "sweep uses 3)")  # fmt: skip
     m = sub.add_parser("merge", help="merge a run's adapter into a servable bf16 model")
     m.add_argument("--run", required=True)
     m.add_argument("--out", default=None)

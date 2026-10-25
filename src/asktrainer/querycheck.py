@@ -25,6 +25,15 @@ SQL (SQLite):
   may stand in. A tie counts neither way; an answer sorted the wrong way fails; databases
   without a tie decide.
 
+- version 4 (2026-10-24) adds two kinds of copies and a stricter notion of evidence:
+  **near-miss copies** (`VARIANT_SEEDS`), whose text values sit around the queries' literals
+  ('x #zerowaste', '#zerowaste x', 'zerowaste', '#ZEROWASTE') and whose numbers and dates sit
+  next to them (2019, 2020, 2021), so "starts with" against "contains", `=` against `LIKE` or
+  `>` against `>=` return different rows; **rescue copies** (`RESCUE_SEEDS`, more rows, literals
+  more often), tried only when no other copy gave evidence, until two do; and a result of only
+  zeros, NULLs and empty strings (a `MAX` over no rows is `(NULL,)`) is no evidence, as in
+  `cyphercheck`. `check_sql(..., version=3)` keeps the old rules (the pilots' scores).
+
 Cypher: no graph is available locally yet, so only a syntax check and an exact match after
 normalising whitespace; anything else is `unverified`.
 """
@@ -46,6 +55,14 @@ MAX_ROWS = 10_000
 FUZZ_SEEDS = (11, 23, 37, 41)
 FUZZ_ROWS = 30
 ORDER_SEED = 53
+VARIANT_SEEDS = (61, 67)  # near-miss copies (version 4)
+RESCUE_SEEDS = tuple(range(101, 113))  # tried only while nothing else gave evidence
+RESCUE_ROWS = 60
+# the checking rules' version, shared with `cyphercheck`; a re-check redoes what an older version
+# decided (2: the same columns in another order count; names, titles and ids unique per node;
+# 3: denser Cypher graphs with skewed end nodes; 4: near-miss and rescue copies, and a result of
+# only zeros and nulls is no evidence)
+CHECKER_VERSION = 4
 
 CYPHER_START = re.compile(r"^(OPTIONAL\s+MATCH|MATCH|WITH|UNWIND|CALL|RETURN)\b", re.IGNORECASE)
 CYPHER_WRITE = re.compile(
@@ -236,6 +253,38 @@ def _literals(queries: list[str]) -> tuple[list[str], list[float]]:
     return sorted(set(strs)), sorted(set(nums))
 
 
+def _informative(rows: list[tuple]) -> bool:
+    """Rows that say something: not empty, not only zeros, nulls and empty lists."""
+    for r in rows:
+        for v in r:
+            if v not in (None, 0, 0.0, (), "", False):
+                return True
+    return False
+
+
+def near_misses(strs: list[str]) -> list[str]:
+    """Text values around each literal: the literal itself, with words before and after it,
+    shortened by a character, and in other letter cases. A query that matches the literal a
+    different way ("starts with" for "contains", `=` for `LIKE`) then returns different rows."""
+    out: list[str] = []
+    for s in strs:
+        if not s or DATE_LIKE.match(s):
+            continue
+        out += [s, f"x {s}", f"{s} x", f"x {s} x", s.upper(), s.lower()]
+        if len(s) > 3:
+            out += [s[1:], s[:-1]]
+    return list(dict.fromkeys(out))
+
+
+def _date_neighbours(dates: list[str]) -> list[str]:
+    """Each date, and the same day a year before and after (for `>` against `>=`)."""
+    out: list[str] = []
+    for d in dates:
+        y = int(d[:4])
+        out += [d, f"{y - 1}{d[4:]}", f"{y + 1}{d[4:]}"]
+    return list(dict.fromkeys(out))
+
+
 def _kind(decl: str, name: str) -> str:
     d, n = (decl or "").upper(), name.lower()
     if (
@@ -295,9 +344,16 @@ def fuzz_db(
     literals: tuple[list[str], list[float]],
     rows: int = FUZZ_ROWS,
     distinct: bool = False,
+    variants: bool = False,
+    lit_p: float = 0.3,
+    text_p: float | None = None,
 ) -> sqlite3.Connection:
     """A copy of the schema filled with random rows. `distinct`: wide value ranges and unique
-    text, so sorting has (almost) no ties."""
+    text, so sorting has (almost) no ties. `variants`: text around the queries' literals
+    (`near_misses`) instead of the literals alone. `lit_p`: how often a number or date comes
+    from the literals; `text_p`: the same for text (default: text is drawn from the literals and
+    four filler words alike). With either `variants` or `text_p`, numbers also come ±1 and dates
+    a year either side of the literals."""
     rnd = random.Random(seed)
     strs, nums = literals
     db = sqlite3.connect(":memory:")
@@ -310,6 +366,13 @@ def fuzz_db(
     date_pool = [s for s in strs if DATE_LIKE.match(s)]
     int_pool = [int(n) for n in nums if n == int(n) and abs(n) < 10**9]
     real_pool = [n for n in nums if abs(n) < 10**9]
+    if variants or text_p is not None:  # numbers and dates next to the literals (`>` vs `>=`)
+        date_pool = _date_neighbours(date_pool)
+        int_pool = sorted({v + d for v in int_pool for d in (-1, 0, 1)})
+        real_pool = sorted({v + d for v in real_pool for d in (-1.0, 0.0, 1.0)})
+    if variants:
+        text_pool = near_misses(strs) + ["alpha", "beta"]
+    date_p = max(lit_p, 0.35)
     made: dict[tuple[str, str], list[Any]] = {}
     tables = _schema_tables(db)
     # referenced tables first so foreign keys can pick existing values
@@ -323,25 +386,28 @@ def fuzz_db(
 
     def value(kind: str) -> Any:
         if kind == "int":
-            if int_pool and rnd.random() < 0.3:
+            if int_pool and rnd.random() < lit_p:
                 return rnd.choice(int_pool)
             return rnd.randint(1, 10**6) if distinct else rnd.randint(1, 6)
         if kind == "real":
-            if real_pool and rnd.random() < 0.3:
+            if real_pool and rnd.random() < lit_p:
                 return rnd.choice(real_pool)
             return round(rnd.uniform(0, 10**6 if distinct else 100), 2)
         if kind == "bool":
             return rnd.randint(0, 1)
         if kind == "date":
-            if date_pool and rnd.random() < 0.35:
+            if date_pool and rnd.random() < date_p:
                 return rnd.choice(date_pool)
             if distinct:
                 day = f"{rnd.randint(1990, 2030)}-{rnd.randint(1, 12):02d}-{rnd.randint(1, 28):02d}"
                 clock = (rnd.randint(0, 23), rnd.randint(0, 59), rnd.randint(0, 59))
                 return f"{day} {clock[0]:02d}:{clock[1]:02d}:{clock[2]:02d}"
             return f"{rnd.randint(2015, 2025)}-{rnd.randint(1, 12):02d}-{rnd.randint(1, 28):02d}"
-        if distinct and not (strs and rnd.random() < 0.3):
+        if distinct and not (strs and rnd.random() < lit_p):
             return f"v{rnd.randrange(10**9):09d}"
+        lit_pool = text_pool[:-2] if variants else strs
+        if text_p is not None and lit_pool:
+            return rnd.choice(lit_pool) if rnd.random() < text_p else rnd.choice(["alpha", "beta"])
         return rnd.choice(text_pool)
 
     for t in order:
@@ -477,8 +543,28 @@ def _ordered_equal(gold: list[tuple], pred: list[tuple]) -> bool:
     return all(same_results([g], [p]) for g, p in zip(gold, pred, strict=True))
 
 
-def check_sql(pred: str, gold: str, schema_script: str | None, real_rows: bool) -> dict[str, Any]:
-    """verdict: pass | fail | unverified (plus `checked_by` and a reason)."""
+def _copies(version: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The filled copies a check runs on: (always, rescue only while nothing gave evidence)."""
+    always: list[dict[str, Any]] = [{"seed": s} for s in FUZZ_SEEDS]
+    if version < 4:
+        return always, []
+    always += [{"seed": s, "variants": True, "lit_p": 0.6} for s in VARIANT_SEEDS]
+    rescue = [  # literals far more often; every other copy with the near-miss values
+        {"seed": s, "rows": RESCUE_ROWS, "lit_p": 0.7, "text_p": 0.7, "variants": n % 2 == 1}
+        for n, s in enumerate(RESCUE_SEEDS)
+    ]
+    return always, rescue
+
+
+def check_sql(
+    pred: str,
+    gold: str,
+    schema_script: str | None,
+    real_rows: bool,
+    version: int = CHECKER_VERSION,
+) -> dict[str, Any]:
+    """verdict: pass | fail | unverified (plus `checked_by` and a reason). `version`: the
+    checking rules (`CHECKER_VERSION`); 3 is the rules before the near-miss and rescue copies."""
     out: dict[str, Any] = {
         "verdict": "fail",
         "checked_by": "",
@@ -488,7 +574,17 @@ def check_sql(pred: str, gold: str, schema_script: str | None, real_rows: bool) 
         "fuzz_agree": 0,
         "fuzz_informative": 0,
         "exact": False,
+        "checker": version,
     }
+
+    def says_something(rows: list[tuple]) -> bool:
+        return _informative(rows) if version >= 4 else bool(rows)
+
+    def tie(db: sqlite3.Connection, g: list[tuple], p: list[tuple]) -> bool:
+        # version 4 also the other way round: the answer's LIMIT cut a tie the gold settles
+        # differently (`SELECT id, MAX(score)` against `ORDER BY score DESC LIMIT 1`)
+        return _tie(db, gold, g, p) or (version >= 4 and _tie(db, q, p, g))
+
     q = (pred or "").strip().rstrip(";").strip()
     out["exact"] = normalise(q) == normalise(gold)
     if not SQL_READ.match(q):
@@ -535,20 +631,26 @@ def check_sql(pred: str, gold: str, schema_script: str | None, real_rows: bool) 
                 return out
             out["real"] = align(g, p) is not None
             if not out["real"]:
-                if _tie(db, gold, g, p):
+                if tie(db, g, p):
                     out["real"], out["ties"] = None, out.get("ties", 0) + 1
                 else:
                     out["reason"] = "rows_differ"
                     return out
             else:
-                evidence += 1 if g else 0
+                evidence += 1 if says_something(g) else 0
         except Exception:
             out["real"] = None  # the gold itself doesn't run on its data
         finally:
             db.close()
     lits = _literals([gold, q])
-    for seed in FUZZ_SEEDS:
-        db = fuzz_db(creates, seed, lits)
+    always, rescue = _copies(version)
+    for n, spec in enumerate(always + rescue):
+        if n == len(always) and evidence:
+            break  # the rescue copies only while nothing else gave evidence
+        if n > len(always) and evidence >= 2:
+            break  # rescued: two informative copies agree
+        seed = spec.pop("seed")
+        db = fuzz_db(creates, seed, lits, **spec)
         try:
             try:
                 g = _run(db, gold)
@@ -560,15 +662,19 @@ def check_sql(pred: str, gold: str, schema_script: str | None, real_rows: bool) 
                 out["reason"] = f"pred:{type(e).__name__}"
                 return out
             if align(g, p) is None:
-                if _tie(db, gold, g, p):
+                if tie(db, g, p):
                     out["ties"] = out.get("ties", 0) + 1
                     continue
-                out["reason"] = "fuzz_rows_differ"
+                out["reason"] = "fuzz_rows_differ" if n < len(always) else "rescue_rows_differ"
+                if spec.get("variants") and n < len(always):
+                    out["reason"] = "near_miss_rows_differ"
                 return out
             out["fuzz_agree"] += 1
-            if g:
+            if says_something(g):
                 out["fuzz_informative"] += 1
                 evidence += 1
+                if n >= len(always):
+                    out["rescued"] = True
         finally:
             db.close()
     if evidence and sorts_result(gold):

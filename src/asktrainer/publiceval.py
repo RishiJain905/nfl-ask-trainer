@@ -31,6 +31,7 @@ from typing import Any
 
 from asktrainer.data.schema import Example
 from asktrainer.querycheck import (  # noqa: F401  (re-exported for callers and tests)
+    CHECKER_VERSION,
     CYPHER_START,
     CYPHER_WRITE,
     MAX_ROWS,
@@ -123,7 +124,9 @@ def parse_call(ex: Example, output: str) -> tuple[bool, str | None, str]:
     return True, (q if isinstance(q, str) and q.strip() else None), "bad_argument"
 
 
-def score(ex: Example, output: str, data: PublicData) -> dict[str, Any]:
+def score(
+    ex: Example, output: str, data: PublicData, checker: int = CHECKER_VERSION
+) -> dict[str, Any]:
     item: dict[str, Any] = {"id": ex.id, "origin": ex.origin, "dialect": ex.dialect,
                             "json_ok": False, "parse_ok": False, "exact": False,
                             "exec_ok": None, "gold_failed": False, "reason": ""}  # fmt: skip
@@ -148,7 +151,7 @@ def score(ex: Example, output: str, data: PublicData) -> dict[str, Any]:
     if ex.dialect == "cypher":
         item["parse_ok"], item["reason"] = cypher_ok(q)
         if item["parse_ok"] and ex.task == "call":
-            _execute_cypher(ex, q, gold, item)
+            _execute_cypher(ex, q, gold, item, checker)
         return item
     if not SQL_READ.match(q):
         item["reason"] = "not_read_only"
@@ -173,7 +176,7 @@ def score(ex: Example, output: str, data: PublicData) -> dict[str, Any]:
         if ex.origin != "gretel":  # no rows: compare on randomly filled copies of the schema
             from asktrainer.querycheck import check_sql
 
-            chk = check_sql(q, gold, script, real_rows=False)
+            chk = check_sql(q, gold, script, real_rows=False, version=checker)
             item["exec_ok"] = {"pass": True, "fail": False}.get(chk["verdict"])
             if item["exec_ok"] is None:
                 item["reason"] = "ok"
@@ -232,7 +235,9 @@ def _graph():
     return _GRAPH["db"]
 
 
-def _execute_cypher(ex: Example, q: str, gold: str, item: dict[str, Any]) -> None:
+def _execute_cypher(
+    ex: Example, q: str, gold: str, item: dict[str, Any], checker: int = CHECKER_VERSION
+) -> None:
     """exec_ok for a Cypher call: on the question's CypherBench graph, or on graphs made from
     the prompt's schema (text2cypher); None when no Neo4j answers or nothing is proven."""
     from asktrainer import cyphercheck as cc
@@ -249,7 +254,7 @@ def _execute_cypher(ex: Example, q: str, gold: str, item: dict[str, Any]) -> Non
             v = cc.check_on_graph(db, gold, [q])[0]
         else:
             _GRAPH["loaded"] = None  # the random graphs replace whatever was loaded
-            v = cc.check_fuzz(db, ex.messages[0].content, gold, [q])[0]
+            v = cc.check_fuzz(db, ex.messages[0].content, gold, [q], version=checker)[0]
     except Exception as e:  # the checker or the server: unproven, never a crash in training
         item["reason"] = f"check_error:{type(e).__name__}"
         return
@@ -258,7 +263,14 @@ def _execute_cypher(ex: Example, q: str, gold: str, item: dict[str, Any]) -> Non
     item["reason"] = v.get("reason") or item["reason"]
 
 
-def verify(examples: Sequence[Example], preds: Sequence[dict[str, str]], data: PublicData):
+def verify(
+    examples: Sequence[Example],
+    preds: Sequence[dict[str, str]],
+    data: PublicData,
+    checker: int = CHECKER_VERSION,
+):
+    """Score each prediction. `checker`: the checking rules' version (`querycheck`); the pilot
+    sweep scores with 3, the rules P1-P7 were scored with."""
     by_id = {e.id: e for e in examples}
     todo = [p for p in preds if p["id"] in by_id]
     # one graph load per CypherBench graph: score grouped by graph, report in the given order
@@ -268,9 +280,9 @@ def verify(examples: Sequence[Example], preds: Sequence[dict[str, str]], data: P
     )
     scored: dict[int, dict[str, Any]] = {}
     for i in order:
-        scored[i] = score(by_id[todo[i]["id"]], todo[i]["output"], data)
+        scored[i] = score(by_id[todo[i]["id"]], todo[i]["output"], data, checker)
     items = [scored[i] for i in range(len(todo))]
-    return {"summary": summarise(items), "items": items}
+    return {"summary": summarise(items), "items": items, "checker": checker}
 
 
 def metrics(result: dict[str, Any]) -> dict[str, float]:

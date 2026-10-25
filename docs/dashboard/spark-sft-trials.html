@@ -433,7 +433,9 @@ td .u { color: var(--muted); font-size: 0.74rem; display: block; }
 
   // ---- trace runs ---------------------------------------------------------------------------------
   var LEVELS = [["high", "--s1"], ["low", "--s2"], ["off", "--s3"]];
-  var REASONS = [["rows_differ", "wrong rows on the real data"], ["fuzz_rows_differ", "wrong rows on a filled copy"], ["parse:", "invalid SQL"],
+  var REASONS = [["rows_differ", "wrong rows on the real data"], ["fuzz_rows_differ", "wrong rows on a filled copy"],
+    ["near_miss_rows_differ", "wrong rows on a near-miss copy (values around the literals)"], ["rescue_rows_differ", "wrong rows on a rescue copy"],
+    ["order_differs", "right rows, wrong order"], ["parse:", "invalid SQL"],
     ["pred:", "query failed to run"], ["syntax:", "invalid Cypher"], ["no_call", "no tool call"], ["truncated", "cut off at the token limit"],
     ["wrong_tool", "called the wrong tool"], ["several_calls", "more than one call"], ["bad_argument", "call without a query"],
     ["not_read_only", "not a read-only query"], ["multiple_statements", "more than one statement"], ["no_graph", "Cypher: no graph to run on yet"],

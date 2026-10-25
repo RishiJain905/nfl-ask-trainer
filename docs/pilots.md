@@ -184,6 +184,13 @@ started with `--after-round 0` while round 1 is still running, the driver would 
 real run** (many hours): train with the PC idle, or free memory first; a larger page file would give the
 spill room instead of a crash.
 
+**Scored with checker version 3 throughout.** The trace checker gained near-miss and rescue copies
+on 2026-10-24 (version 4, `docs/traces.md`). The evalset scorer uses the same checkers, so the
+sweep pins the old rules (`SCORE_CHECKER = 3`, `ask-trainer evalrun --checker 3`) and P8 is scored
+exactly like P1-P7. The pilots' training data (the round-0 export) is unchanged too. Re-scoring
+every pilot under version 4 afterwards needs no GPU: `evalrun --checker 4 --no-wandb` on the saved
+`preds_llamacpp_*.jsonl`.
+
 **Paused twice at Rishi's request** (he needed the PC): before P5 (2026-10-21 22:02 to 2026-10-22 19:56)
 and after P7 (2026-10-23 00:55 to 2026-10-24 16:32; P7 had finished training and all three scores). `D:\nfl-ml-data\ask\finetune\HOLD` makes `ask-trainer train`
 refuse new runs (exit 3), so the driver stops when it tries to start the next pilot (no run folder is
