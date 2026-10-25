@@ -153,6 +153,28 @@ sampling error of a 200-question evalset suggested: the evalset is the same for 
 only the training order and the adapter's start. One pair isn't a noise estimate on its own; P8 (P5 at
 seed 7) is the second.
 
+**Seed noise, JEPA (P8 = P5 at seed 7, 2026-10-25):** 37.3 / 34.4 / **35.5%** at steps 50 / 100 / final
+(gretel 58.0%, SQaLe 34.9%, CypherBench 33.3%, text2cypher 13.3%; valid calls 98.0%) against P5's 36.2 /
+35.5 / 36.3%. Its step-50 adapter is the best checkpoint of the sweep (37.3%). Validation loss 0.353 at
+step 25 and 0.329 at the end, against P7's 0.329 / 0.328 on the same subset: the JEPA term's early cost
+again, gone by the end. ~46 s a step (83 minutes with the evaluations). Scored with checker version 3,
+like P1-P7.
+
+**The two seeds side by side** (final exec accuracy; steps 50 / 100 in brackets):
+
+| | seed 42 | seed 7 | mean | seed-to-seed |
+|---|---|---|---|---|
+| plain (P1, P7) | 35.0% (33.1 / 34.8) | 35.2% (33.3 / 33.5) | 35.1% | 0.2 points |
+| JEPA λ 1, k 0 (P5, P8) | 36.3% (36.2 / 35.5) | 35.5% (37.3 / 34.4) | 35.9% | 0.8 points |
+| JEPA's lead | +1.3 | +0.3 | +0.8 | |
+
+By the rule JEPA stays: it beats plain at both seeds, by more than plain's seed-to-seed difference (0.2,
+the driver's `rule.seed_noise`). The lead is small, though: +0.8 points on average is one or two of the
+~186 decided questions, about the size of JEPA's own seed-to-seed difference, and it costs ~10% more time
+a step. What the curves say about the data size: the plain runs still climb at the end (P1 34.8 -> 35.0,
+P7 33.5 -> 35.2), the JEPA runs don't (P5 flat, P8 best at step 50), so neither setting shows clearly that
+the pilots' ~3,400 examples are too few; the real run's mix is far larger either way.
+
 **Validation loss isn't comparable across seeds.** `train.py` picks the 200 validation-loss examples
 (of 379) with `stratified_subset(..., cfg.seed)`, so P7 / P8 (seed 7) measure their loss on a different
 200 than P1-P6 (seed 42): P7's step-25 loss is 0.329 against P1's 0.349, from the subset, not the model.
@@ -160,7 +182,8 @@ The exec accuracy is unaffected (the evalset is a fixed 200, the same for every 
 fairly with each other. For the real run the subset gets a fixed seed of its own (changed after the
 sweep, not during it, so P7 and P8 use the same code).
 
-**P8 can't train while the PC is in use (2026-10-24).** Started at 16:32 with Rishi working on the PC, it
+**P8 couldn't train while the PC was in use (2026-10-24; it trained on 2026-10-25, below).** Started at
+16:32 with Rishi working on the PC, it
 froze twice at the same point, during step 8: `HSA exception: MemoryRegion::BlockAllocator::alloc
 failed.` in `pilot-p8.train.log`, the process spinning with no further steps. Both attempts are kept
 (`finetune\pilot-p8-failed-20261024`, `pilot-p8-failed2-20261024`). What we measured:
@@ -182,10 +205,13 @@ RAM) ran first, from 17:12. Started by hand with the driver's own `finish_traces
 `status.json` shows `phase: traces-rest`. Run P8 only after the trace run has finished (a `DONE` event):
 started with `--after-round 0` while round 1 is still running, the driver would stop tracegen. Round 1
 finished 2026-10-25 02:51 UTC (`DONE`, 26,085 answers; its llama-server on port 8090 stopped after), so
-the driver now goes straight to P8. P8 waits for Rishi's restart, which brings in the larger page file
-(33,792 MB, set 2026-10-24: the commit limit goes from ~48 to ~64 GB). **For the
-real run** (many hours): train with the PC idle, or free memory first; a larger page file would give the
-spill room instead of a crash.
+the driver now goes straight to P8. Rishi set a larger page file (33,792 MB, 2026-10-24: the commit
+limit goes from ~48 to ~64 GB at the next restart), but asked for one more try before restarting, with
+less running on the PC: on 2026-10-25 05:00 UTC the commit limit was still 48.1 GB, with 18.6 GB free
+(against ~1.6 GB at the failures). P8 trained through (12.6 GB of VRAM in use, ~4.6 GB of commit to spare
+at step 10; the start-up `HSA exception` line appeared once and was harmless, as in P4-P6) and was scored
+by 06:43. **For the real run** (many hours): train with the PC idle, or free memory first; the larger
+page file, once in effect, gives the spill room instead of a crash.
 
 **Scored with checker version 3 throughout.** The trace checker gained near-miss and rescue copies
 on 2026-10-24 (version 4, `docs/traces.md`). The evalset scorer uses the same checkers, so the
