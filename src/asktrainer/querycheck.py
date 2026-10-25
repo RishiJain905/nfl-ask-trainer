@@ -582,8 +582,9 @@ def check_sql(
 
     def tie(db: sqlite3.Connection, g: list[tuple], p: list[tuple]) -> bool:
         # version 4 also the other way round: the answer's LIMIT cut a tie the gold settles
-        # differently (`SELECT id, MAX(score)` against `ORDER BY score DESC LIMIT 1`)
-        return _tie(db, gold, g, p) or (version >= 4 and _tie(db, q, p, g))
+        # differently (`SELECT id, MAX(score)` against `ORDER BY score DESC LIMIT 1`). Only a
+        # sorted LIMIT: an unsorted one keeps any rows, which says nothing about a top-N gold
+        return _tie(db, gold, g, p) or (version >= 4 and sorts_result(q) and _tie(db, q, p, g))
 
     q = (pred or "").strip().rstrip(";").strip()
     out["exact"] = normalise(q) == normalise(gold)

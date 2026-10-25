@@ -180,7 +180,10 @@ failed.` in `pilot-p8.train.log`, the process spinning with no further steps. Bo
 So P8 runs when the PC is idle, and the trace run's second round (llama.cpp: a fixed ~7.6 GB of VRAM, little
 RAM) ran first, from 17:12. Started by hand with the driver's own `finish_traces()`, so the sweep's
 `status.json` shows `phase: traces-rest`. Run P8 only after the trace run has finished (a `DONE` event):
-started with `--after-round 0` while round 1 is still running, the driver would stop tracegen. **For the
+started with `--after-round 0` while round 1 is still running, the driver would stop tracegen. Round 1
+finished 2026-10-25 02:51 UTC (`DONE`, 26,085 answers; its llama-server on port 8090 stopped after), so
+the driver now goes straight to P8. P8 waits for Rishi's restart, which brings in the larger page file
+(33,792 MB, set 2026-10-24: the commit limit goes from ~48 to ~64 GB). **For the
 real run** (many hours): train with the PC idle, or free memory first; a larger page file would give the
 spill room instead of a crash.
 

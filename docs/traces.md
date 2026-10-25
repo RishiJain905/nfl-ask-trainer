@@ -128,28 +128,59 @@ graphs:
   satisfy at once (reason `rescue_rows_differ` when the answer then differs; `rescued` on a pass).
 - **No evidence from zeros and NULLs** in SQL too (as Cypher already had): a `MAX` over no
   matching rows is `(NULL,)` and used to count.
-- **Ties both ways**: a tie at the *answer's* `LIMIT` counts neither way, like one at the
+- **Ties both ways**: a tie at the *answer's* sorted `LIMIT` counts neither way, like one at the
   reference's (`SELECT worker_id, MAX(score)` against `ORDER BY score DESC, worker_id LIMIT 1`:
   SQLite's bare column and the `LIMIT` can pick different tied rows). Found in the first
-  version-4 re-check, where the denser near-miss values made such ties common; fixed before the
-  re-check that counts.
+  version-4 re-check, where the denser near-miss values made such ties common. Only a *sorted*
+  `LIMIT` of the answer's: an unsorted `LIMIT 1` keeps any row, and against a reference's top
+  one it would otherwise tie on every copy that has more than one row and pass on the copies
+  with one (the order check needs two rows, so nothing else catches it).
+- **Unsorted slices in Cypher**: a reference with `SKIP` / `LIMIT` and no `ORDER BY` anywhere,
+  including one in a `WITH` before the last `RETURN` (text2cypher's generated "skip the first 2
+  records and return the next 2" questions: `WITH n.description AS d SKIP 2 LIMIT 2 RETURN d`),
+  may return any rows of its full result, so an answer whose rows are some of them is a tie
+  (`cyphercheck.strip_slice`; SQL's unsorted `LIMIT ... OFFSET` already counted). The near-miss
+  graphs give such a reference more matching nodes than its slice, and the first version-4
+  re-check failed answers that sorted before slicing.
+- The first version-4 re-check (stopped at text2cypher's 1,200th answer, saved as
+  `rechecks.v4-first-partial.jsonl`) had both problems; the re-check that counts started again
+  from `rechecks.before-v4.jsonl` with both fixed.
 - `check_sql(..., version=3)` / `check_fuzz(..., version=3)` keep the old rules, and
   `ask-trainer evalrun --checker 3` scores with them: the pilot sweep scores every pilot with 3
   (`scripts/pilot_sweep.py: SCORE_CHECKER`), so P8 stays comparable with P1-P7.
 
-The re-check of the pilot trace run under version 4 (2026-10-24 evening, the run's round 1 still
-going; `rechecks.before-v4.jsonl` is the file before it):
+The re-check of the pilot trace run under version 4 (2026-10-25, after round 1 finished;
+`rechecks.before-v4.jsonl` is the file before it):
 
-| SQL | Re-checked | Pass | Fail | Unverified |
+| Answers that were (version 3) | Re-checked | Pass | Fail | Unverified |
 |---|---|---|---|---|
-| were passes (not exact) | 3,172 | 3,070 | 85 (2.7%) | 17 (only zeros / NULLs) |
-| were unverified | 578 | 114 (62 rescued) | 157 | 307 |
+| SQL passes (not exact) | 3,234 | 3,128 (16 only through rescue copies) | 89 (2.8%) | 17 (only zeros / NULLs) |
+| SQL unverified | 632 | 127 (77 rescued) | 176 | 329 |
+| text2cypher passes (on graphs) | 844 | 811 | 32 (3.8%) | 1 |
+| text2cypher unverified | 614 | 30 (11 rescued) | 25 | 559 |
 
-Samples of the new fails read as real mistakes: the starts-with / contains slips, `= 'CBT'` for
-`LIKE '%CBT%'` and back, `DISTINCT` against duplicates, `JOIN` for the reference's `LEFT JOIN`,
-an extra `IS NOT NULL`, joins that multiply rows, a `Year = (SELECT MAX(Year))` for `Year =
-2022`. The rule stays the reference's: `= 'Canada'` against `LIKE '%Canada%'` fails even where a
-reader might accept either.
+Not in the table, because they weren't version-3 verdicts: round 1's last 758 text2cypher
+answers and 141 CypherBench answers, run on a graph for the first time in this re-check
+(text2cypher 60 pass, 641 fail, 57 unverified; CypherBench 27 / 111 / 3). Most text2cypher
+answers that stay unverified have golds no schema-built graph answers: the generated "is there a
+path between X and Y" questions over prompts that list no relationships (`no_graph`).
+
+Samples of the new fails read as real mistakes. SQL: the starts-with / contains slips, `=
+'CBT'` for `LIKE '%CBT%'` and back, `DISTINCT` against duplicates, `JOIN` for the reference's
+`LEFT JOIN`, an extra `IS NOT NULL`, joins that multiply rows, a `Year = (SELECT MAX(Year))` for
+`Year = 2022`. Cypher: `CONTAINS` for `STARTS WITH`, `toLower(...) CONTAINS` against a
+case-sensitive `CONTAINS` and back, `= 'South Korea'` against `CONTAINS`, an `ORDER BY ... DESC`
+without the reference's `IS NOT NULL` (Neo4j sorts nulls first going down), no `UNWIND` of a list
+property, `count(DISTINCT a)` against `count(a)`, a "skip 2, next 2" that only took `LIMIT 2`.
+The rule stays the reference's: `= 'Canada'` against `LIKE '%Canada%'` fails even where a reader
+might accept either.
+
+A known limit kept as it was: names and ids are unique per node in 85% of a graph's values (the
+rest from a small word pool, so `GROUP BY` a name sometimes merges two nodes), and SQL's copies
+draw names from a pool throughout. An answer that groups by the node (or name and id) where the
+reference groups by the name then differs on a copy where two names repeat, as one sampled
+text2cypher answer did on a near-miss graph (its pool is smaller: the near-miss values and two
+filler words). On real data with unique names the two agree.
 
 ## Files of a run (`D:\nfl-ml-data\ask\traces\<run>\`)
 
@@ -299,3 +330,20 @@ generated + 437 prompt tokens a second), mean thought 322 tokens, 13% of thought
 budget; pass rates SQaLe 29%, gretel 34%, text2cypher 15%, CypherBench 27% (Cypher after the
 re-check). A passing traced example is short: mean 890 tokens (prompt + thought + call), p99
 2,170, longest 2,628, so the pilots train at `max_len` 4,096.
+
+Both rounds finished 2026-10-25 02:51 UTC (round 0 ran 2026-10-21; round 1, the 11,071 failed
+question-level pairs, 2026-10-24 21:12 to 2026-10-25 02:51 UTC, ~33 answers a minute at 16 at
+once, 237-245 generated tokens a second). Totals after the version-4 re-check (dashboard
+tick 87):
+
+| Set | Answers | Pass | Fail | Unverified | Questions with a pass |
+|---|---|---|---|---|---|
+| SQaLe | 10,301 | 2,174 (21.1%) | 7,800 | 327 | 2,131 of 6,000 |
+| gretel | 4,924 | 1,213 (24.6%) | 3,692 | 19 | 1,212 of 3,000 |
+| text2cypher | 9,102 | 1,147 (12.6%) | 7,338 | 617 | 1,141 of 5,000 |
+| CypherBench | 1,758 | 362 (20.6%) | 1,379 | 17 | 362 of 1,000 |
+| **All** | **26,085** | **4,896 (18.8%)** | **20,209** | **980** | **4,846 of 15,000 (32.3%)** |
+
+Pass at the first try / within two: high 28.5% / 34.8%, low 28.1% / 34.9%, off 13.7% / 17.8%.
+The pilots trained on the export made after round 0 (3,794 questions); the real run's export
+comes from these totals.

@@ -455,6 +455,34 @@ def strip_limit(q: str) -> str | None:
     return q[:i].rstrip()
 
 
+SLICE = re.compile(r"(SKIP|LIMIT)\s+(\d+|\$\w+)\b", re.IGNORECASE)
+
+
+def strip_slice(q: str) -> str | None:
+    """An unsorted query without its top-level SKIP and LIMIT (in the RETURN or a WITH before
+    it), or None when it sorts anywhere or has neither: such a query may return any of the
+    full result's rows (`WITH n.d AS d SKIP 2 LIMIT 2 RETURN d`)."""
+    bare = _bare(q)
+    if re.search(r"\b(UNION|ORDER\s+BY)\b", bare, re.IGNORECASE):
+        return None
+    depth, cuts = 0, []
+    for i, ch in enumerate(bare):
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif depth == 0 and (i == 0 or not (bare[i - 1].isalnum() or bare[i - 1] == "_")):
+            if m := SLICE.match(bare, i):
+                cuts.append((i, m.end()))
+    if not cuts:
+        return None
+    out, last = [], 0
+    for a, b in cuts:
+        out.append(q[last:a])
+        last = b
+    return re.sub(r"[ \t]{2,}", " ", "".join(out) + q[last:]).strip()
+
+
 def _sort_key_column(q: str, names: list[str]) -> int | None:
     i = _final(q, r"ORDER\s+BY\b")
     if i is None:
@@ -481,8 +509,11 @@ def _sort_key_column(q: str, names: list[str]) -> int | None:
     return tails.index(base) if tails.count(base) == 1 else None
 
 
-def _tie(db: Neo4j, gold: str, g: list[tuple], p: list[tuple]) -> bool:
+def _tie(db: Neo4j, gold: str, g: list[tuple], p: list[tuple], slices: bool = False) -> bool:
+    """Do gold and prediction differ only by which rows a LIMIT kept? `slices` (version 4): an
+    unsorted gold's SKIP and LIMIT anywhere (`strip_slice`), not just a final LIMIT."""
     unl = strip_limit(gold)
+    sliced = unl is None and slices and (unl := strip_slice(gold)) is not None
     if unl is None or len(p) != len(g) or not g:
         return False
     try:
@@ -491,6 +522,8 @@ def _tie(db: Neo4j, gold: str, g: list[tuple], p: list[tuple]) -> bool:
         return False
     if len(full) <= len(g):
         return False
+    if sliced:  # the gold's own rows must be some of the full result's, or it wasn't a slice
+        return contained_in(g, full) and contained_in(p, full)
     if not sorts_result(unl):
         return contained_in(p, full)
     k, key = len(g), _sort_key_column(unl, names)
@@ -515,7 +548,8 @@ def compare(
 ) -> list[dict[str, Any]]:
     """Run gold and each prediction on the loaded graph: per prediction one of
     match | tie | differ | pred_error:<code> | gold_error | uninformative. `both_ways` (version
-    4): a tie at the prediction's own final LIMIT also counts as a tie."""
+    4): a tie at the prediction's own sorted final LIMIT also counts as a tie, and an unsorted
+    gold's SKIP / LIMIT anywhere is a slice of its full result (`strip_slice`)."""
     try:
         _, g = db.run(gold)
     except Exception as e:
@@ -536,7 +570,9 @@ def compare(
             if moved is not p:
                 o["columns_moved"] = True
             out.append(o)
-        elif _tie(db, gold, g, p) or (both_ways and _tie(db, q, p, g)):
+        elif _tie(db, gold, g, p, slices=both_ways) or (
+            both_ways and sorts_result(q) and _tie(db, q, p, g)
+        ):
             out.append({"outcome": "tie"})
         else:
             out.append({"outcome": "differ", "gold_rows": len(g), "pred_rows": len(p)})

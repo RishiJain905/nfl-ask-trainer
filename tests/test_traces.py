@@ -108,6 +108,11 @@ def test_a_tie_at_the_answers_limit_counts_neither_way():
     assert qc.check_sql(pred, gold, schema, real_rows=False)["verdict"] == "pass"
     wrong = "SELECT worker_id, score FROM worker_scores ORDER BY score ASC, worker_id LIMIT 1"
     assert qc.check_sql(wrong, gold, schema, real_rows=False)["verdict"] == "fail"
+    # the other way round only for a sorted LIMIT: an unsorted one is no top-N (with one row
+    # there's no order check to catch it)
+    top = "SELECT worker_id FROM worker_scores ORDER BY score DESC, worker_id LIMIT 1"
+    any1 = "SELECT worker_id FROM worker_scores LIMIT 1"
+    assert qc.check_sql(any1, top, schema, real_rows=False)["verdict"] == "fail"
 
 
 def test_only_nulls_and_zeros_are_no_evidence():

@@ -98,6 +98,16 @@ def test_final_clause_helpers_look_after_the_last_return():
     assert not cc.sorts_result(sub) and cc.strip_limit(sub) is None
 
 
+def test_strip_slice_drops_an_unsorted_golds_skip_and_limit():
+    q = "MATCH (n:Topic) WHERE n.d STARTS WITH 'T' WITH n.d AS d SKIP 2 LIMIT 2 RETURN d"
+    assert cc.strip_limit(q) is None
+    assert cc.strip_slice(q) == "MATCH (n:Topic) WHERE n.d STARTS WITH 'T' WITH n.d AS d RETURN d"
+    assert cc.strip_slice("MATCH (n) RETURN n.x SKIP $s LIMIT 3") == "MATCH (n) RETURN n.x"
+    assert cc.strip_slice("MATCH (n) RETURN n.x ORDER BY n.x SKIP 2 LIMIT 2") is None
+    assert cc.strip_slice("MATCH (n) WHERE n.x = 'LIMIT 2' RETURN n.x") is None
+    assert cc.strip_slice("MATCH (n) RETURN n.x") is None
+
+
 def test_informative_rows():
     assert not cc._informative([]) and not cc._informative([(0,), (None,)])
     assert cc._informative([(0, "x")]) and cc._informative([((1, 2),)])
@@ -166,6 +176,18 @@ def test_near_miss_graphs_catch_starts_with_for_contains():
     assert cc.check_fuzz(DB, SYSTEM, gold, [pred], version=3)[0]["verdict"] == "pass"
     r = cc.check_fuzz(DB, SYSTEM, gold, [pred])[0]
     assert r["verdict"] == "fail" and r["reason"] == "near_miss_rows_differ"
+
+
+@neo4j
+def test_an_unsorted_slice_takes_any_rows_and_an_unsorted_limit_no_top_n():
+    gold = "MATCH (p:Product) WITH p.productName AS n SKIP 2 LIMIT 2 RETURN n"
+    sorted_slice = "MATCH (p:Product) RETURN p.productName AS n ORDER BY n SKIP 2 LIMIT 2"
+    assert cc.check_fuzz(DB, SYSTEM, gold, [sorted_slice], version=3)[0]["verdict"] == "fail"
+    r = cc.check_fuzz(DB, SYSTEM, gold, [sorted_slice])[0]
+    assert r["verdict"] == "unverified" and r["reason"] == "ties_only"
+    top = "MATCH (p:Product) RETURN p.productName AS n ORDER BY p.unitPrice DESC, n LIMIT 1"
+    any1 = "MATCH (p:Product) RETURN p.productName AS n LIMIT 1"
+    assert cc.check_fuzz(DB, SYSTEM, top, [any1])[0]["verdict"] == "fail"
 
 
 @neo4j
