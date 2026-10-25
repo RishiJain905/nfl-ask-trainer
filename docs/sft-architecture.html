@@ -298,7 +298,7 @@ Planned (thinking on, Spark's own tool-call format):
     <div class="flow">
       <div class="st"><b>1 · Serve</b><span>Spark Q8_0 in llama.cpp, 16 requests at once, thinking on.</span></div>
       <div class="st"><b>2 · Sample</b><span>A few answers per training question, effort high for most, low for a share.</span></div>
-      <div class="st"><b>3 · Check</b><span>Run the tool call's query: SQL in SQLite, Cypher in Neo4j where the graph exists, else match the reference.</span></div>
+      <div class="st"><b>3 · Check</b><span>Run the tool call's query and the reference: SQL in SQLite on real or filled rows, Cypher in the local Neo4j (in batches). Section 07a.</span></div>
       <div class="st trained"><b>4 · Keep</b><span>The first correct answer: its trace and its call become the training reply.</span></div>
       <div class="st"><b>5 · Hint if none</b><span>Never right: show the reference query, keep reasoning that reaches it, train without the hint (STaR's rationalisation).</span></div>
     </div>
@@ -332,6 +332,91 @@ Planned (thinking on, Spark's own tool-call format):
     <li><strong>A thinking budget helps (tsmoke-2).</strong> Same 100 questions at low × 2 with <code>--reasoning-budget 1024</code>: 34.9% passed (26.5% without), 41.8% solved within 2 tries, mean thought 321 tokens (471), and 36.3 answers a minute (~27 minutes per 1,000).</li>
     <li><strong>Training on traces works.</strong> The 47 passing traces trained for 5 steps (loss 0.48 → 0.14) and the model then generated thought + tool call in Spark's format: 9 / 9 valid calls, 5 / 5 gretel answers with the right rows (<code>tsmoke-train-1</code>).</li>
   </ul>
+</section>
+
+<section aria-labelledby="inside">
+  <h2 id="inside"><span class="n">07a</span>Inside the trace run: one question, start to finish</h2>
+  <p>The trace run builds the training data. Spark answers each training question with thinking on, a checker runs its query, and only answers that return the right rows are kept. Nothing is trained here, and the model is the plain base Spark-X2.6-4B (Q8_0 on your llama.cpp fork, no adapter). One real answer from the pilot trace run, gretel, thinking high, second try:</p>
+  <div class="panel" style="display:flex;flex-direction:column;gap:14px">
+    <div class="flow">
+      <div class="st"><b>1 · Prompt</b><span>The question, the database schema (<code>CREATE TABLE</code> statements, or the graph schema), and the tool definition (e.g. "execute this SQL").</span></div>
+      <div class="st"><b>2 · Answer</b><span>Spark thinks, then calls the tool once with a query. One turn: the query is not run for Spark, it never sees results.</span></div>
+      <div class="st"><b>3 · Check</b><span>The checker runs Spark's query and the dataset's reference query on test data and compares the rows.</span></div>
+      <div class="st trained"><b>4 · Store</b><span>One line per answer in <code>results.jsonl</code>; the export later turns only the passes into training examples.</span></div>
+    </div>
+    <pre class="sample">Question: Calculate the maximum number of retweets for tweets with the hashtag #zerowaste
+          in the "sustainable_living" schema.
+
+Thinking (149 tokens): "... Need max retweets where hashtags like '#zerowaste%' or contains ...
+          SELECT MAX(retweets) FROM tweets WHERE hashtags LIKE '#zerowaste%' ..."
+
+Spark's tool call: SELECT MAX(retweets) AS max_retweets FROM tweets WHERE hashtags LIKE '#zerowaste%';
+Reference query:   SELECT MAX(retweets) FROM tweets WHERE hashtags LIKE '%#zerowaste%'
+
+Verdict: pass (same rows on every filled copy of the schema)</pre>
+  </div>
+
+  <h3>Where the queries run</h3>
+  <div class="panel scroll">
+    <table>
+      <thead><tr><th>Dataset</th><th>Query language</th><th>Test data</th><th>When</th></tr></thead>
+      <tbody>
+        <tr><td>gretel</td><td>SQL (SQLite)</td><td>the dataset's own rows (its <code>INSERT</code> statements) where it has them, and three copies of the schema filled with random rows</td><td>at once, inside the trace process</td></tr>
+        <tr><td>SQaLe</td><td>SQL (SQLite)</td><td>three copies of the schema filled with random rows; the queries' own values (<code>'Peru'</code>, <code>2020</code>) are mixed into the random data</td><td>at once</td></tr>
+        <tr><td>CypherBench</td><td>Cypher (Neo4j)</td><td>the benchmark's own graphs, loaded into the local <code>asktrainer-neo4j</code></td><td>in batches: the re-check, every ~25-30 min and once more at the end</td></tr>
+        <tr><td>text2cypher</td><td>Cypher (Neo4j)</td><td>graphs built from each question's schema, with the queries' values planted in them</td><td>in batches, as above</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">Every database is throwaway: SQLite in memory, Neo4j wiped per graph. Queries are read-only and nothing touches the NFL data.</p>
+
+  <h3>What gets stored, per answer</h3>
+  <p><code>D:\nfl-ml-data\ask\traces\&lt;run&gt;\results.jsonl</code>: the question id, dataset, thinking level and try, Spark's full thinking text, its tool call and query, the verdict with how it was checked and why, token counts and seconds. Cypher verdicts from the batch re-check go to <code>rechecks.jsonl</code> beside it (the latest record per answer wins). The export reads both and writes only the passes as training examples: <strong>question + schema → Spark's thinking → the tool call</strong>.</p>
+
+  <h3>Pass, fail and unverified</h3>
+  <div class="panel scroll">
+    <table>
+      <thead><tr><th>Verdict</th><th>Means</th><th>Examples</th><th>Used for training?</th></tr></thead>
+      <tbody>
+        <tr><td><strong>pass</strong></td><td>Spark's query returns the same rows as the reference on every test database where the reference returns something</td><td>the example above</td><td>yes</td></tr>
+        <tr><td><strong>fail</strong></td><td>different rows, or no usable query</td><td>wrong rows, invalid SQL, a query that errors, no tool call, two calls, a write query, cut off at the token limit</td><td>no</td></tr>
+        <tr><td><strong>unverified</strong></td><td>the answer exists but can't be judged (yet)</td><td>see below</td><td>no</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><strong>Why unverified exists when every question gets an answer.</strong> Answered isn't judged: judging needs a comparison that carries information. Two cases:</p>
+  <ul style="margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:4px;max-width:72ch">
+    <li><strong>Not run yet:</strong> Cypher answers waiting for the next batch re-check in Neo4j. Temporary; the final re-check before any export clears them.</li>
+    <li><strong>The comparison would prove nothing:</strong> the reference returns no rows, or only zeros, nulls or ties, on all of the test data. Then a wrong query that also returns nothing would "match" (even <code>... WHERE 1 = 0</code>), so it can't count as a pass; Spark's query may be right, so it isn't a fail either. A typical case: <code>WHERE country = 'Peru' AND year &gt; 2020 AND status = 'active'</code>, where three random copies rarely satisfy every condition at once.</li>
+  </ul>
+  <div class="panel scroll">
+    <table>
+      <thead><tr><th>Pilot trace run, 2026-10-24 21:40 (round 1 in progress)</th><th class="num">Answers</th><th class="num">Unverified</th><th class="num">Waiting for the re-check</th><th class="num">Nothing usable to compare</th></tr></thead>
+      <tbody>
+        <tr><td>SQaLe</td><td class="num">9,368</td><td class="num">518 (6%)</td><td class="num">0</td><td class="num">518</td></tr>
+        <tr><td>gretel</td><td class="num">4,523</td><td class="num">26 (1%)</td><td class="num">0</td><td class="num">26</td></tr>
+        <tr><td>text2cypher</td><td class="num">8,254</td><td class="num">924 (11%)</td><td class="num">333</td><td class="num">591</td></tr>
+        <tr><td>CypherBench</td><td class="num">1,599</td><td class="num">72 (5%)</td><td class="num">59</td><td class="num">13</td></tr>
+        <tr><td><strong>All</strong></td><td class="num"><strong>23,744</strong></td><td class="num"><strong>1,540 (6.5%)</strong></td><td class="num"><strong>392</strong></td><td class="num"><strong>~1,150</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>What a pass proves, and the checker improvement</h3>
+  <p>A pass means "the same results on every test database we tried": strong evidence, not proof. The example above shows the limit. Spark's <code>LIKE '#zerowaste%'</code> means "starts with" and the reference's <code>LIKE '%#zerowaste%'</code> means "contains"; on a tweet tagged <code>#eco #zerowaste</code> they disagree. It passed because it was checked only on random copies, whose hashtag values were exactly <code>#zerowaste</code>, and both queries returned the same rows.</p>
+  <p><strong>Approved 2026-10-24, before the real run's data is exported:</strong></p>
+  <ol style="margin:0;padding-left:1.3em;display:flex;flex-direction:column;gap:4px;max-width:72ch">
+    <li><strong>Catch near-misses:</strong> extra test copies whose text values sit <em>around</em> the queries' literals and patterns (<code>"#eco #zerowaste"</code>, <code>"#zerowaste!"</code>, other letter cases), so "starts with" vs "contains" and similar slips come out as different rows.</li>
+    <li><strong>Rescue the unverified:</strong> where the reference returns nothing usable, keep filling fresh copies (more seeds, more rows) until it does, up to a limit, then compare. CPU only.</li>
+    <li>Re-check every answer with the new checker version: some passes become fails (near-misses), some unverified become passes or fails. The pilots' data and scores stay on the current checker, so P8 remains comparable with P1-P7.</li>
+  </ol>
+
+  <h3>Why temperature 1 here, and greedy for scoring</h3>
+  <p>The trace run samples at Spark's own defaults (temperature 1.0, top-p 0.95). <strong>Strictness comes from the checker, not the temperature:</strong> a sloppy answer is executed, fails and is thrown away. Greedy decoding would give the same answer every time, so a second try would repeat the first one's mistake; sampling explores, and some retries succeed. Training on answers sampled at the model's natural settings is also the point of self-generated SFT. Scoring a trained adapter is the strict part: the evalset is answered greedily (temperature 0), so every pilot is judged on its single best answer.</p>
+
+  <h3>Why two rounds</h3>
+  <p>The plan gives every question up to 2 tries per thinking level. Round 0 was the first try for all 15,000 questions (27% passed: the ~3,800 examples the pilots train on). Round 1 retries only the ~11,000 question-and-level pairs that failed. It was paused after round 0 so the pilots could start ~5 hours sooner, and ran on 2026-10-24. The retries pass less often (~18% of SQL answers in its first hour, plus ~240 Cypher passes from the re-checks by 21:40), but they come from the questions the model found hard, and should add roughly half as many examples again for the real run.</p>
+  <p class="note">Speed: ~33 answers a minute in both rounds, ~245 generated + ~400 prompt tokens a second. The 796 tokens/s in section 07 is the generation-only benchmark; a trace run also reads a ~650-token prompt for every answer and its short answers (median ~300 tokens) keep the 16 slots turning over, so prompt reading competes with generation. Worth tuning before the real trace run.</p>
 </section>
 
 <section aria-labelledby="sftqa">
