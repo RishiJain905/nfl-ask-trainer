@@ -165,31 +165,47 @@ def _sync(device) -> None:
         torch.cuda.synchronize(device)
 
 
+def _mode(f: Features) -> str | None:
+    """A call example's thinking mode ("on" for high and low), None for other tasks."""
+    return None if f.thinking is None else "off" if f.thinking == "off" else "on"
+
+
 @torch.no_grad()
 def validation_loss(
     model, feats: list[Features], ct: ChatTokenizer, cfg: TrainConfig, device
 ) -> dict[str, float]:
-    """val/loss (token-mean CE over all val examples) and per origin; val/jepa when on."""
+    """val/loss (token-mean CE over all val examples), per origin and, for call examples, per
+    thinking mode (val/loss/thinking_on, val/loss/thinking_off); val/jepa when on."""
     was = model.training
     model.eval()
     sums: dict[str, list[float]] = {}
+    modes: dict[str, list[float]] = {}
     jsum, jn = 0.0, 0
     try:
-        # batches never mix origins (so the per-origin sums stay exact), longest first
-        order = sorted(range(len(feats)), key=lambda i: (feats[i].origin, -feats[i].length))
+        # batches never mix origins or thinking modes (so the per-origin and per-mode sums stay
+        # exact), longest first
+        def by(i: int) -> tuple:
+            return feats[i].origin, str(_mode(feats[i])), -feats[i].length
+
+        order = sorted(range(len(feats)), key=by)
         bs = max(1, cfg.eval.val_batch)
         batches: list[list[Features]] = []
         for i in order:
-            if batches and len(batches[-1]) < bs and batches[-1][0].origin == feats[i].origin:
+            last = batches[-1][0] if batches else None
+            if (last is not None and len(batches[-1]) < bs and last.origin == feats[i].origin
+                    and _mode(last) == _mode(feats[i])):  # fmt: skip
                 batches[-1].append(feats[i])
             else:
                 batches.append([feats[i]])
         for group in batches:
             b = collate(group, ct.pad_id, with_views=cfg.jepa.enabled).to(device)
             ce, dist = forward_losses(model, b, cfg.jepa.distance)
-            acc = sums.setdefault(group[0].origin, [0.0, 0])
-            acc[0] += float(ce)
-            acc[1] += b.n_target
+            m = _mode(group[0])
+            for acc in [sums.setdefault(group[0].origin, [0.0, 0])] + (
+                [modes.setdefault(m, [0.0, 0])] if m else []
+            ):
+                acc[0] += float(ce)
+                acc[1] += b.n_target
             if dist is not None:
                 jsum += float(dist.sum())
                 jn += dist.numel()
@@ -203,6 +219,9 @@ def validation_loss(
     for origin, (loss_sum, n) in sorted(sums.items()):
         if n:
             out[f"val/loss/{origin}"] = loss_sum / n
+    for m, (loss_sum, n) in sorted(modes.items()):
+        if n:
+            out[f"val/loss/thinking_{m}"] = loss_sum / n
     if jn:
         out["val/jepa"] = jsum / jn
     return out

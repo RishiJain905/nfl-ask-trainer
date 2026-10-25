@@ -451,6 +451,73 @@ def test_export_keeps_the_first_passing_answer_per_question_and_level(tmp_path):
     }
 
 
+def _public(tmp_path: Path, n_train: int = 30) -> Path:
+    """A public set `sqale` with `n_train` training and 3 test-split (val) examples; the test
+    split's second question repeats training question 5 (other case and spacing)."""
+    pub = tmp_path / "public"
+    (pub / "sqale").mkdir(parents=True)
+    for split, n in (("train", n_train), ("val", 3)):
+        rows = []
+        for i in range(n):
+            ex = _example()
+            text = "Question  NUMBER 5?" if (split, i) == ("val", 1) else f"question {split} {i}?"
+            ex.update(id=f"sqale-{split}-{i}", origin="sqale", meta={"db_id": f"d{i}"})
+            ex["jepa"] = {"text": text, "code": GOLD}
+            if split == "train" and i == 5:
+                ex["jepa"]["text"] = "question number 5?"
+            rows.append(json.dumps(ex) + "\n")
+        (pub / "sqale" / f"examples_{split}.jsonl").write_text("".join(rows), encoding="utf-8")
+    return pub
+
+
+def test_gold_examples_hold_out_val_traces_and_test_questions(tmp_path):
+    from asktrainer.traceexport import _lines, gold
+
+    pub = _public(tmp_path)
+    traced = {f"sqale-train-{i}" for i in range(10)}
+    kept = {"sqale-train-0", "sqale-train-1"}  # questions with a kept trace
+    stats = gold(pub, tmp_path / "g", {"sqale": -1}, traced, kept, val_per_set=4, seed=0)
+    tr = _lines(tmp_path / "g" / "examples_train.jsonl")
+    va = _lines(tmp_path / "g" / "examples_val.jsonl")
+    src = lambda rows: {e["meta"]["qid"] for e in rows}  # noqa: E731
+    assert len(va) == 4 and not src(va) & traced and {e["split"] for e in va} == {"val"}
+    assert not src(tr) & (kept | src(va) | {"sqale-train-5"})  # 5 repeats a test question
+    assert len(tr) == 30 - 2 - 1 - 4 and stats["sets"]["sqale"]["test_repeats_left_out"] == 1
+    assert stats["sets"]["sqale"]["traced_in_train"] == 7  # traced, no kept trace: gold only
+    for e in tr + va:
+        turn = e["messages"][-1]
+        assert e["task"] == "call" and e["thinking"] == "off" and e["group"] == "gold"
+        assert e["id"].endswith("~gold") and not turn.get("reasoning_content")
+        call = turn["tool_calls"][0]["function"]
+        assert list(call["arguments"].values()) == [GOLD] and e["tools"]
+    # the P9 form: no traced question at all; a size takes a prefix of the same order, and an
+    # example's prompt (tool name, distractor) doesn't depend on the sample
+    gold(pub, tmp_path / "p9", {"sqale": 5}, traced, traced, val_per_set=4, seed=0)
+    p9 = _lines(tmp_path / "p9" / "examples_train.jsonl")
+    assert len(p9) == 5 and not src(p9) & traced
+    whole = {e["id"]: e for e in tr}
+    assert all(whole[e["id"]]["messages"] == e["messages"] for e in p9 if e["id"] in whole)
+    assert [e["id"] for e in _lines(tmp_path / "p9" / "examples_val.jsonl")] == [
+        e["id"] for e in va
+    ]
+
+
+def test_the_test_set_is_the_test_split_minus_the_evalset(tmp_path):
+    from asktrainer import traceprep
+    from asktrainer.traceexport import _lines, evalset
+
+    pub = _public(tmp_path)
+    ev = evalset(pub, tmp_path / "ev", per_set=1, seed=0, sets=("sqale",))
+    used = {e["id"].removeprefix("eval~") for e in _lines(tmp_path / "ev" / "examples_val.jsonl")}
+    st = evalset(pub, tmp_path / "ts", -1, 0, sets=("sqale",), exclude=used, group="testset")
+    ts = _lines(tmp_path / "ts" / "examples_val.jsonl")
+    assert ev["examples"] == 1 and st["examples"] == 2 and st["excluded"] == 1
+    assert all(e["id"].startswith("test~") and e["group"] == "testset" for e in ts)
+    assert not {e["id"].removeprefix("test~") for e in ts} & used
+    assert traceprep.parse_sizes("all") == -1
+    assert traceprep.parse_sizes("sqale:all,gretel:9") == {"sqale": -1, "gretel": 9}
+
+
 def test_prep_with_a_mix_gives_each_question_one_level_and_interleaves(tmp_path):
     from asktrainer import traceprep
 

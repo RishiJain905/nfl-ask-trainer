@@ -128,6 +128,15 @@ def test_the_sweep_plans_by_the_pre_registered_rule():
     cfg = sw.merged(sw.BASE, plan["P8"])
     assert cfg["optim"]["grad_accum"] == 32 and cfg["optim"]["lr"] == 4e-4 and cfg["seed"] == 7
     assert sw._wsl(Path(r"D:\nfl-ml-data\ask\x.jsonl")) == "/mnt/d/nfl-ml-data/ask/x.jsonl"
+    assert "P9" not in plan
+    res["P7"] = _result(4e-4, 0.41, 0.5)
+    res["P8"] = _result(4e-4, 0.46, 0.4, jepa={"enabled": True, "lam": 1.0, "k": 0})
+    # P9, the gold-answer check: P1 exactly (its lr, rank, plain) plus the gold set, final only
+    p9 = sw.merged(sw.BASE, dict(sw.plan(res))["P9"])
+    assert p9["optim"]["lr"] == 1e-4 and p9["seed"] == 42 and not p9["jepa"]["enabled"]
+    assert p9["data"]["public"] == {"gold-p9": {"train": -1, "val": -1}}
+    assert p9["checkpoint"] == {"every_steps": 20, "keep": 2, "adapter_every_steps": 0}
+    assert p9["eval"]["loss_every_steps"] == 100 and p9["eval"]["val_batch"] == 2
 
 
 def _bench():

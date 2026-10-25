@@ -51,15 +51,18 @@ def parse_plan(text: str) -> dict[str, int]:
 
 
 def parse_sizes(text: str) -> int | dict[str, int]:
-    """`25` (every set) or `sqale:6000,gretel:3000,...` (sets left out get none)."""
+    """`25` (every set) or `sqale:6000,gretel:3000,...` (sets left out get none); `all` for
+    every example (-1)."""
     if text.strip().isdigit():
         return int(text)
+    if text.strip() == "all":
+        return -1
     sizes: dict[str, int] = {}
     for part in text.split(","):
         name, _, n = part.partition(":")
-        if name.strip() not in SETS or not n.strip().isdigit():
+        if name.strip() not in SETS or not (n.strip().isdigit() or n.strip() == "all"):
             raise ValueError(f"bad size entry {part!r}: use a number or set:N,... ({SETS})")
-        sizes[name.strip()] = int(n)
+        sizes[name.strip()] = -1 if n.strip() == "all" else int(n)
     return sizes
 
 
@@ -83,7 +86,7 @@ def _sample(path: Path, n: int, rnd: random.Random) -> list[dict[str, Any]]:
     with path.open(encoding="utf-8") as f:
         rows = [json.loads(line) for line in f if line.strip()]
     rnd.shuffle(rows)
-    return rows[:n]
+    return rows if n < 0 else rows[:n]
 
 
 def prep(

@@ -131,6 +131,24 @@ def test_loop_learns_and_saves(tiny_tok, tmp_path, arch, jepa):
         assert all(r["train/loss"] == r["train/ce"] for r in train_rows)
 
 
+def test_validation_loss_splits_by_thinking_mode(tiny_tok):
+    cfg = _cfg(LLAMA_TARGETS, False)
+    model = tiny_llama(tiny_tok)
+    ct = ChatTokenizer(tiny_tok, cfg.optim.max_len)
+    feats, _ = ct.tokenize_all([example(i, "generate") for i in range(6)])
+    assert not any(k.startswith("val/loss/thinking") for k in validation_loss(
+        model, feats, ct, cfg, "cpu"))  # fmt: skip
+    for i, f in enumerate(feats):  # as call examples at these levels
+        f.thinking = ("high", "off", "low")[i % 3]
+    out = validation_loss(model, feats, ct, cfg, "cpu")
+    n_on = sum(f.n_target for f in feats if f.thinking != "off")
+    n_off = sum(f.n_target for f in feats if f.thinking == "off")
+    both = (out["val/loss/thinking_on"] * n_on + out["val/loss/thinking_off"] * n_off) / (
+        n_on + n_off
+    )
+    assert abs(both - out["val/loss"]) < 1e-5
+
+
 def test_jepa_ratio_drops_views(tiny_tok, tmp_path):
     cfg = _cfg(LLAMA_TARGETS, True, epochs=2)
     cfg.jepa.ratio = 0.5

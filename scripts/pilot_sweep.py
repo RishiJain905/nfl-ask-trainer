@@ -44,8 +44,12 @@ TRACE_PORT = 8090
 BUDGET = 1024
 TIE = 0.005  # exec accuracies this close count as a tie
 # every pilot is scored with the checking rules P1-P7 were scored with (querycheck version 3),
-# so the sweep compares like with like; version 4 (near-miss and rescue copies) came after P7
+# so the sweep compares like with like; version 4 (near-miss and rescue copies) came after P7,
+# and each adapter scored from P9 on is also scored with it (`<tag>-checker4`, no W&B), the
+# version P1-P8 were re-scored with after the sweep
 SCORE_CHECKER = 3
+ALSO_CHECKER = 4
+GOLD_P9 = "gold-p9"  # `ask-trainer traces gold --name gold-p9 --run pilot --skip all ...`
 # captured output is UTF-8 (WSL, progress bars, W&B's emoji), never the console code page
 TEXT = {"text": True, "encoding": "utf-8", "errors": "replace"}
 
@@ -136,6 +140,17 @@ def plan(results: dict[str, dict]) -> list[tuple[str, dict]]:
     jepa = best_of([results["P5"], results["P6"]])
     out.append(("P7", {**_overrides_of(plain), "seed": 7}))
     out.append(("P8", {**_overrides_of(jepa), "seed": 7}))
+    if "P8" not in results:
+        return out
+    # after the sweep, the gold-answer check (docs/pilots.md, "P9"): P1 exactly (plain, seed 42,
+    # the same traces) plus about as many tokens of the datasets' gold queries as thinking-off
+    # calls, on questions never traced; only the final adapter is scored
+    out.append(("P9", {
+        **_overrides_of(results["P1"]),
+        "data": {"public": {GOLD_P9: {"train": -1, "val": -1}}},
+        "eval": {"loss_every_steps": 100, "val_loss_n": 300},
+        "checkpoint": {"adapter_every_steps": 0},
+    }))  # fmt: skip
     return out
 
 
@@ -333,6 +348,14 @@ class Sweep:
             raise RuntimeError(f"scoring {run or 'base'} {tag} failed: {r.stderr[-600:]}")
         res = json.loads(r.stdout.strip().splitlines()[-1])
         res["generate"] = gen
+        if run is not None and ALSO_CHECKER:
+            r = self.wsl(
+                f"ask-trainer evalrun --run {run} --preds {_wsl(preds)} "
+                f"--tag {tag}-checker{ALSO_CHECKER} --step {step} --checker {ALSO_CHECKER} "
+                "--no-wandb"
+            )
+            if r.returncode == 0:
+                res[f"checker{ALSO_CHECKER}"] = json.loads(r.stdout.strip().splitlines()[-1])
         return res
 
     def convert(self, run: str, adapter: str) -> Path:
@@ -352,7 +375,9 @@ class Sweep:
         name = f"pilot-{p.lower()}"
         cfg = merged(BASE, over)
         cfg["name"] = name
-        cfg["data"]["public"] = {f"traces-{self.traces}": {"train": -1, "val": -1}}
+        # every pilot trains on the trace export; a pilot's own `data.public` adds to it (P9)
+        cfg["data"]["public"] = {f"traces-{self.traces}": {"train": -1, "val": -1},
+                                 **cfg["data"].get("public", {})}  # fmt: skip
         cfg_path = self.dir / "configs" / f"{name}.yaml"
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         cfg_path.write_text(json.dumps(cfg, indent=1), encoding="utf-8")  # JSON is YAML

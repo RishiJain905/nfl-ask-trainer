@@ -254,3 +254,40 @@ refuse new runs (exit 3), so the driver stops when it tries to start the next pi
 made) and writes `phase: paused` to `status.json`. To go on: delete the file, start the trainer's Neo4j
 (`docker start asktrainer-neo4j`), then `C:\Python314\python.exe scripts\pilot_sweep.py --traces pilot
 --after-round 0`; the driver skips the finished pilots, runs the rest, then the trace run's second round.
+
+## P9: does adding the datasets' gold answers help? (planned 2026-10-25)
+
+**Why.** The ~52M / ~100M sizes in the plan were counted on the public sets in their old format (a
+JSON reply, no thinking, no tools). In the trained format (Spark's tool call, with or without its own
+thought) the only data is what the trace run passed: a full export of both rounds under checker 4 is
+4,662 examples, 4.3M tokens, about 1.3x a pilot. The real run therefore trains on two kinds of
+example (Rishi, 2026-10-25: thinking and non-thinking, no caps on the gold share):
+
+- **traces** (thinking on, plus the few `off` passes): Spark's own checked thoughts and calls;
+- **gold** (thinking off): the dataset's own query as the tool call, no thought, for every training
+  question without a kept trace (`ask-trainer traces gold`, `docs/traces.md`, "Gold answers").
+
+No pilot mixed in gold answers, so P9 checks it first, as cheaply as a fair comparison allows.
+
+**The run.** P1 exactly (plain, lr 1e-4, rank 16, seed 42, the same 3,415 traces) plus `gold-p9`:
+4,235 gold examples, 3.06M tokens (P1's traces are 3.04M), on questions never traced, in the real
+run's proportions (SQaLe 1,565, text2cypher 1,430, gretel 1,035, CypherBench 205). 7,650 examples,
+239 steps. Validation: the traces' 379 plus 100 gold (25 a set, never traced); the loss on a fixed
+300 of them every 100 steps, with `val/loss/thinking_on` and `val/loss/thinking_off` (new). Only the
+final adapter is scored (checker 3 into W&B like every pilot, and checker 4 next to it).
+
+**Why not shorter.** The comparison with P1 needs P1's 107 trace steps again, plus the gold's ~130.
+Cut from the first estimate (~3 h): the step-50 / step-100 adapters and their scoring, JEPA (~15%
+slower a step; the objective is a separate question), and most validation passes. What is left: ~2.4 h
+of training and ~15 minutes of scoring. Half as much gold would save ~35 minutes but test a weaker dose
+(the real run is ~15 gold tokens to 1 trace token).
+
+**The rule (pre-registered).** Under checker 4, P1 scored 34.05% (63 of 185 decided). The real run
+adds the gold answers only if **P9 scores at least 35.1%** (P1 + 1 point; plain's seed-to-seed
+difference is 0.9). A health check comes with it: P9 must still think on the evalset (P1, P5 and P7
+wrote a thought for 100% of its 200 questions, median ~830 characters); a collapse in thought length
+would count against it even at a higher score. If P9 falls short, the real run trains on the traces
+alone, and more traces (another trace run, where the trace-speed work matters) come next.
+
+Run (GPU, one job at a time): `docker start asktrainer-neo4j` if needed, then
+`C:\Python314\python.exe scripts\pilot_sweep.py --traces pilot --only P9`.

@@ -23,6 +23,7 @@ ones the RL stage will use.
 | `querycheck.py` | the SQL checker (below) | both |
 | `cyphercheck.py` | the Cypher checker: CypherBench's graphs and schema-built random graphs in a local Neo4j; also re-checks a run's answers (`rechecks.jsonl`) | Windows (WSL reaches it too) |
 | `scripts/trace_feed.py` | turns the run's files into dashboard ticks | Windows |
+| `ask-trainer traces export` / `gold` / `evalset` / `testset` (`traceexport.py`) | the passing answers as training examples; the datasets' gold queries as thinking-off examples; the scored held-out questions (last section) | WSL |
 
 WSL can't reach a server on Windows' localhost (WSL runs in NAT mode), so everything that talks
 to llama-server runs on Windows with nothing but the standard library.
@@ -347,3 +348,38 @@ tick 87):
 Pass at the first try / within two: high 28.5% / 34.8%, low 28.1% / 34.9%, off 13.7% / 17.8%.
 The pilots trained on the export made after round 0 (3,794 questions); the real run's export
 comes from these totals.
+
+## Gold answers, validation and the held-out tests (2026-10-25)
+
+A trace run passes about a third of its questions, so the traces alone are small (4,662 examples,
+4.3M tokens from the pilot run). The rest of the training questions train in Spark's thinking-off
+mode on the dataset's own query (Rishi, 2026-10-25: thinking and non-thinking together), checked
+first by pilot P9 (`docs/pilots.md`).
+
+```
+ask-trainer traces gold --name gold-p9 --run pilot --skip all \
+    --per-set sqale:1565,text2cypher:1430,gretel:1035,cypherbench:205 --val-per-set 25
+ask-trainer traces gold --name gold-full --run pilot --skip traces-pilot-full --per-set all
+ask-trainer traces testset --name testset
+```
+
+A gold example is the same tool-call prompt the traces use (tool name, argument and distractor drawn
+per question, so a smaller sample never changes an example), `thinking: off`, no thought, and the
+gold query as the call; group `gold`, id `<question>~gold`. It renders exactly like a trace run's own
+`off` answers (the prompt ends `<|Bot|></think>`, the target is the `<tool_call>...` and the end token).
+
+What is kept apart, and how:
+
+| Set | From | Used for | Shares no question with |
+|---|---|---|---|
+| traces (train) | the trace run's passes | training, thinking on | its own val, gold, the tests |
+| traces (val) | 10% of the passing questions, held out by the export | validation loss | the rest |
+| gold (train) | the training split's questions without a kept trace (`--skip`: a trace export's train *and* val; `all`: every traced question) | training, thinking off | the trace export, gold val, the tests |
+| gold (val) | the first `--val-per-set` never-traced questions of each set | validation loss (`val/loss/thinking_off`) | the rest |
+| evalset | 50 a set from each dataset's own test split (`examples_val.jsonl`) | the scored evaluation pilots and checkpoints are compared on | the rest |
+| testset | the rest of the same test splits: 250 a set, 1,000 (`traces testset`) | scored once, on the finished real run only, never for a decision | the rest |
+
+The test splits are each dataset's published test split. Gold training questions whose text repeats
+one of them (lower case, spaces collapsed) are left out: 7 in text2cypher (one of them an evalset
+question), none elsewhere; no trace-export question repeats one. The benchmarks (BIRD dev,
+CypherBench's full graphs) are separate downloads, in no training set.

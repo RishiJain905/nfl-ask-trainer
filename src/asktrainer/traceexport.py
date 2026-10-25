@@ -10,6 +10,9 @@ validation split (a seeded `val_share`), so no question is in both.
 
 Writes `<training>/public/traces-<run>/examples_{train,val}.jsonl` and `stats.json`, so a config
 picks the set up like any public dataset (`data.public: {traces-<run>: {train: -1, val: -1}}`).
+
+Also here: `gold` (the datasets' own queries as thinking-off calls, for the questions without a
+kept trace), `evalset` (the scored held-out questions) and its sibling the test set.
 """
 
 from __future__ import annotations
@@ -73,21 +76,31 @@ EVAL_THOUGHT = "(the model writes its own thought here: this example is scored, 
 
 
 def evalset(
-    public_root: Path, out_dir: Path, per_set: int = 50, seed: int = 0, sets=None
+    public_root: Path,
+    out_dir: Path,
+    per_set: int = 50,
+    seed: int = 0,
+    sets=None,
+    exclude: set[str] | None = None,
+    group: str = "evalset",
 ) -> dict[str, Any]:
     """Held-out questions in the tool-call format, for the scored evaluation of trained runs:
-    a seeded `per_set` from each public set's *validation* split (never traced or trained on),
-    with the dataset's gold query as the call. Group `evalset`: the trainer generates and scores
-    these but leaves them out of the validation loss (their thought is a placeholder)."""
+    a seeded `per_set` (-1: all) from each public set's *validation* split (the dataset's own
+    test split: never traced or trained on), with the dataset's gold query as the call. Group
+    `evalset`: the trainer generates and scores these but leaves them out of the validation loss
+    (their thought is a placeholder). The test set (`group="testset"`) is the rest of the same
+    splits (`exclude`: the evalset's source ids), scored only once, on the finished run."""
     from asktrainer.data import tool_prompt
 
     sets = sets or ("sqale", "gretel", "text2cypher", "cypherbench")
     rnd = random.Random(seed)
+    prefix = "eval" if group == "evalset" else "test"
     out, counts = [], {}
     for name in sets:
-        rows = _lines(public_root / name / "examples_val.jsonl")
+        rows = [r for r in _lines(public_root / name / "examples_val.jsonl")
+                if r["id"] not in (exclude or set())]  # fmt: skip
         random.Random(f"{seed}-{name}").shuffle(rows)
-        rows = rows[:per_set]
+        rows = rows if per_set < 0 else rows[:per_set]
         counts[name] = len(rows)
         for ex in rows:
             p = tool_prompt.from_example_dict(ex, rnd)
@@ -96,11 +109,11 @@ def evalset(
             out.append(
                 Example.model_validate(
                     {
-                        "id": f"eval~{ex['id']}",
+                        "id": f"{prefix}~{ex['id']}",
                         "origin": ex["origin"],
                         "task": "call",
                         "split": "val",
-                        "group": "evalset",
+                        "group": group,
                         "messages": [
                             {"role": "system", "content": p["system"]},
                             {"role": "user", "content": p["user"]},
@@ -116,7 +129,86 @@ def evalset(
             )
     out_dir.mkdir(parents=True, exist_ok=True)
     write_jsonl(out_dir / "examples_val.jsonl", out)
-    stats = {"per_set": counts, "examples": len(out), "seed": seed}
+    stats = {"per_set": counts, "examples": len(out), "seed": seed, "group": group,
+             "excluded": len(exclude or ())}  # fmt: skip
+    (out_dir / "stats.json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
+    return stats
+
+
+def _norm(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+def gold_example(ex: dict[str, Any], split: str, seed: int = 0) -> Example:
+    """A public example's gold query as a thinking-off call: the tool-call prompt the traces
+    use (its tool name and distractor drawn per example, so a different sample never shifts
+    them), no thought, and the dataset's own query as the call."""
+    from asktrainer.data import tool_prompt
+
+    p = tool_prompt.from_example_dict(ex, random.Random(f"{seed}-{ex['id']}"))
+    gold = json.loads(ex["messages"][-1]["content"])["query"]
+    return Example.model_validate(
+        {
+            "id": f"{ex['id']}~gold",
+            "origin": ex["origin"],
+            "task": "call",
+            "split": split,
+            "group": "gold",
+            "messages": [
+                {"role": "system", "content": p["system"]},
+                {"role": "user", "content": p["user"]},
+                tool_prompt.assistant_turn(None, p["tool"], gold),
+            ],
+            "jepa": {"text": ex["jepa"]["text"], "code": gold},
+            "dialect": ex["dialect"],
+            "meta": {**(ex.get("meta") or {}), "qid": ex["id"], "gold": gold},
+            "tools": p["tools"],
+            "thinking": "off",
+        }
+    )
+
+
+def gold(
+    public_root: Path,
+    out_dir: Path,
+    sizes: dict[str, int],
+    traced: set[str],
+    kept: set[str],
+    val_per_set: int = 100,
+    seed: int = 0,
+) -> dict[str, Any]:
+    """The datasets' gold queries as thinking-off examples (group `gold`), from each set's
+    *training* split, in a seeded order:
+
+    - left out: the questions with a kept trace (`kept`: the trace export's train *and* val, so
+      no question is in two examples) and those whose text repeats one of the set's test split
+      (`examples_val.jsonl`, where the evalset and the test set come from);
+    - the first `val_per_set` questions never traced (`traced`) are the validation split, so no
+      trace, training example or test question shares one;
+    - then up to `sizes[set]` training examples (-1: all the rest).
+
+    With `kept == traced` no traced question is used at all (the P9 check: new questions only)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    train, val, info = [], [], {}
+    for name, n in sizes.items():
+        rows = sorted(_lines(public_root / name / "examples_train.jsonl"), key=lambda r: r["id"])
+        random.Random(f"{seed}-{name}").shuffle(rows)
+        tests = {_norm(r["jepa"]["text"])
+                 for r in _lines(public_root / name / "examples_val.jsonl")}  # fmt: skip
+        repeats = {r["id"] for r in rows if _norm(r["jepa"]["text"]) in tests}
+        rows = [r for r in rows if r["id"] not in kept and r["id"] not in repeats]
+        v = [r for r in rows if r["id"] not in traced][:val_per_set]
+        v_ids = {r["id"] for r in v}
+        t = [r for r in rows if r["id"] not in v_ids]
+        t = t if n < 0 else t[:n]
+        val += [gold_example(r, "val", seed) for r in v]
+        train += [gold_example(r, "train", seed) for r in t]
+        info[name] = {"train": len(t), "val": len(v), "test_repeats_left_out": len(repeats),
+                      "traced_in_train": sum(r["id"] in traced for r in t)}  # fmt: skip
+    write_jsonl(out_dir / "examples_train.jsonl", train)
+    write_jsonl(out_dir / "examples_val.jsonl", val)
+    stats = {"train": len(train), "val": len(val), "seed": seed, "sets": info,
+             "kept_traces_left_out": len(kept), "traced": len(traced)}  # fmt: skip
     (out_dir / "stats.json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
     return stats
 

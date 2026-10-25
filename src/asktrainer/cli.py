@@ -269,7 +269,9 @@ def public_cmd(rest: list[str]) -> int:
 
 def traces_cmd(args) -> int:
     """`traces prep` writes a run's questions and plan (generation runs on Windows);
-    `traces export` turns its passing answers into `call` training examples."""
+    `traces export` turns its passing answers into `call` training examples; `traces gold`
+    writes the datasets' own queries as thinking-off examples for the questions without a kept
+    trace; `traces evalset` / `testset` the held-out questions that are scored."""
     from asktrainer import traceprep
 
     paths = get_paths()
@@ -277,7 +279,7 @@ def traces_cmd(args) -> int:
     if args.action == "export":
         from asktrainer import traceexport
 
-        out = paths.public / f"traces-{args.name}"
+        out = paths.public / (args.out_name or f"traces-{args.name}")
         print(json.dumps(traceexport.export(run_dir, out, args.val_share, args.seed)))
         return 0
     if args.action == "evalset":
@@ -285,6 +287,34 @@ def traces_cmd(args) -> int:
 
         n = int(args.per_set) if args.per_set.isdigit() else 50
         print(json.dumps(traceexport.evalset(paths.public, paths.public / args.name, n, args.seed)))
+        return 0
+    if args.action == "testset":  # the rest of the test splits: everything the evalset isn't
+        from asktrainer import traceexport
+
+        ev = traceexport._lines(paths.public / "evalset" / "examples_val.jsonl")
+        used = {e["id"].removeprefix("eval~") for e in ev}
+        stats = traceexport.evalset(paths.public, paths.public / args.name, -1, args.seed,
+                                    exclude=used, group="testset")  # fmt: skip
+        print(json.dumps(stats))
+        return 0
+    if args.action == "gold":
+        from asktrainer import traceexport
+
+        if not args.run:
+            raise SystemExit("traces gold needs --run (the trace run whose questions it skips)")
+        traced = {q["qid"] for q in traceexport._lines(paths.traces / args.run / "questions.jsonl")}
+        if args.skip == "all":
+            kept = traced
+        else:  # a trace export: its train and val questions
+            d = paths.public / args.skip
+            kept = {e["meta"]["qid"] for split in ("train", "val")
+                    for e in traceexport._lines(d / f"examples_{split}.jsonl")}  # fmt: skip
+        sizes = traceprep.parse_sizes(args.per_set)
+        if isinstance(sizes, int):
+            sizes = dict.fromkeys(traceprep.SETS, sizes)
+        stats = traceexport.gold(paths.public, paths.public / args.name, sizes, traced, kept,
+                                 args.val_per_set, args.seed)  # fmt: skip
+        print(json.dumps({**stats, "skip": args.skip, "run": args.run}))
         return 0
     plan = traceprep.parse_plan(args.plan)
     cfg = traceprep.prep(
@@ -352,9 +382,11 @@ def main(argv: list[str] | None = None) -> int:
     tr = sub.add_parser(
         "traces", help="thinking-trace runs: `traces prep` writes questions and plan"
     )
-    tr.add_argument("action", choices=["prep", "export", "evalset"])
-    tr.add_argument("--name", required=True)
-    tr.add_argument("--per-set", default="25", help="N for every set, or sqale:N,gretel:N,...")
+    tr.add_argument("action", choices=["prep", "export", "evalset", "testset", "gold"])
+    tr.add_argument("--name", required=True, help="the trace run (prep, export) or the set written")
+    tr.add_argument(
+        "--per-set", default="25", help="N for every set, or sqale:N,gretel:N,... (N or all)"
+    )
     tr.add_argument("--plan", default="high:4,low:2,off:1", help="tries per thinking level")
     tr.add_argument(
         "--mix", default=None, help="one level per question, drawn with these weights: high:W,..."
@@ -363,6 +395,13 @@ def main(argv: list[str] | None = None) -> int:
     tr.add_argument("--budget", type=int, default=None, help="the server's --reasoning-budget")
     tr.add_argument("--seed", type=int, default=0)
     tr.add_argument("--val-share", type=float, default=0.1, help="export: questions held out")
+    tr.add_argument("--out-name", default=None, help="export: the set written (traces-<run>)")
+    tr.add_argument("--run", default=None, help="gold: the trace run whose questions it skips")
+    tr.add_argument(
+        "--skip", default="all",
+        help="gold: `all` traced questions, or a trace export's (e.g. traces-pilot-full)",
+    )  # fmt: skip
+    tr.add_argument("--val-per-set", type=int, default=100, help="gold: validation examples")
     sub.add_parser("probe", help="run scripts/probe_model.py (extra args passed through)")
     sub.add_parser("public", help="public datasets (python -m asktrainer.data.public ...)")
     args, rest = ap.parse_known_args(argv)

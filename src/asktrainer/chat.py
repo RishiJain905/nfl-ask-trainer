@@ -58,6 +58,7 @@ class Features:
     text_pos: int = -1  # index of the text view's embedding token (within text_ids)
     code_ids: list[int] = field(default_factory=list)
     code_pos: int = -1
+    thinking: str | None = None  # a call example's level (high / low / off); None otherwise
 
     @property
     def n_target(self) -> int:
@@ -137,7 +138,7 @@ class ChatTokenizer:
 
     def features(self, ex: Example) -> Features:
         ids, plen = self.full_ids(ex)
-        f = Features(ex.id, ex.origin, ex.task, ex.group, ids, plen)
+        f = Features(ex.id, ex.origin, ex.task, ex.group, ids, plen, thinking=ex.thinking)
         if self.jepa:
             f.text_ids, f.text_pos, f.code_ids, f.code_pos = self.views(ex)
         return f

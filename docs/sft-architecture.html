@@ -120,7 +120,7 @@ a { color: var(--accent); }
     <div class="fact"><span class="k">Trained weights (LoRA)</span><span class="v">31.0M · 0.75%</span><span class="s">rank 16 in every linear layer of 36 blocks</span></div>
     <div class="fact"><span class="k">Public training pool</span><span class="v">95,618 · 61.3M tok</span><span class="s">4 datasets, MIT / Apache-2.0</span></div>
     <div class="fact"><span class="k">Pilot sweep</span><span class="v">8 × ~4.0M tok</span><span class="s">186 steps, ~1.4 h each before traces</span></div>
-    <div class="fact"><span class="k">Real run</span><span class="v">~52M tok</span><span class="s">2,534 steps, ~16–17 h before traces</span></div>
+    <div class="fact"><span class="k">Real run</span><span class="v">traces + gold</span><span class="s">~65–70M tok, ~2,500 steps; after P9 (section 13)</span></div>
     <div class="fact"><span class="k">Trace generator (llama.cpp, Q8_0)</span><span class="v">796 tok/s</span><span class="s">16 requests at once; 99.42% same top token as bf16</span></div>
     <div class="fact"><span class="k">Crash safety</span><span class="v">every 20 steps</span><span class="s">last 2 checkpoints kept, resume in place</span></div>
   </div>
@@ -555,6 +555,7 @@ Verdict: pass (same rows on every filled copy of the schema)</pre>
 
 <section aria-labelledby="real">
   <h2 id="real"><span class="n">09</span>The real run</h2>
+  <p class="note"><strong>Superseded 2026-10-25:</strong> the real run's data is the traces plus the datasets' gold answers in thinking-off mode, gated by pilot P9 (section 13).</p>
   <p>One pass over ~52M tokens with the pilot's winning settings. The two noisy or narrow sets are capped: gretel's answers are sometimes wrong, and CypherBench has only four training graphs.</p>
   <div class="panel scroll">
     <svg viewBox="0 0 760 44" width="760" height="44" role="img" aria-label="Token share: SQaLe 27.7M, text2cypher 17.5M, gretel 7.1M, CypherBench 2.5M">
@@ -640,7 +641,12 @@ Verdict: pass (same rows on every filled copy of the schema)</pre>
 </section>
 
 <section aria-labelledby="scale">
-  <h2 id="scale"><span class="n">13</span>Data size: ~52M or ~100M tokens</h2>
+  <h2 id="scale"><span class="n">13</span>Data size (updated 2026-10-25)</h2>
+  <div class="panel">
+    <p><strong>After the pilots, 2026-10-25.</strong> The sizes below were counted on the sets in their old format (a JSON reply, no thinking, no tools). In the trained format, Spark's tool call with its own checked thought, the trace run gives <strong>4,662 examples, 4.3M tokens</strong>, about 1.3× a pilot. So the real run trains on two kinds of example: the <strong>traces</strong> (thinking on) and, for every other training question, the dataset's own query as a <strong>thinking-off</strong> call (<em>gold</em>, ~76k examples). Your call: thinking and non-thinking together, no cap on the gold share, and the run takes as long as it needs (checkpoints every 20 steps make any pause safe).</p>
+    <p><strong>Pilot P9 checks the gold answers first:</strong> P1 exactly plus 3.06M gold tokens on never-traced questions, ~2.5 h. The gold answers go into the real run only if P9 scores at least 35.1% under checker 4 (P1's 34.05% + 1 point; plain's seed-to-seed difference is 0.9) and still thinks on every question. Otherwise the real run trains on the traces alone and another trace run grows them.</p>
+    <p><strong>Kept apart:</strong> the traces' validation questions (10%), gold validation (never-traced questions), the evalset (200 from the datasets' own test splits; the checkpoints are compared on it) and a <strong>test set</strong> (the other 1,000 test-split questions), scored once on the finished run and never used for a decision. The table below is the old estimate, kept for the record.</p>
+  </div>
   <p>The ~52M figure is what the four sets give with the sampling done so far, not a deliberate cap. More SQL is already on D:: SQaLe-2 has 163,468 usable examples, of which 30,000 are converted (re-converting more takes a few minutes on the CPU). Cypher is the limit: every permissively licensed Cypher set we have is already in, so a bigger mix shows text2cypher twice to keep Cypher at about a third of the tokens.</p>
   <div class="panel scroll">
     <table>
