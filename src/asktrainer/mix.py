@@ -68,7 +68,8 @@ def load_mix(cfg: TrainConfig, paths: Paths, length: Callable[[Example], int] | 
             tr = keep
         for task, n in (("route", cfg.data.nfl_route), ("generate", cfg.data.nfl_generate)):
             train += _sample([e for e in tr if e.task == task], n, rng)
-        val += va if cfg.data.nfl_val < 0 else stratified_subset(va, cfg.data.nfl_val, cfg.seed)
+        n_val, sub_seed = cfg.data.nfl_val, cfg.eval.subset_seed  # the run's seed doesn't move it
+        val += va if n_val < 0 else stratified_subset(va, n_val, sub_seed)
         info["nfl_train_too_long"] = len(too_long)
         info["nfl_max_tokens"] = limit
         manifest = nfl_dir / "manifest.json"

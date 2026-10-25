@@ -179,8 +179,9 @@ the pilots' ~3,400 examples are too few; the real run's mix is far larger either
 (of 379) with `stratified_subset(..., cfg.seed)`, so P7 / P8 (seed 7) measure their loss on a different
 200 than P1-P6 (seed 42): P7's step-25 loss is 0.329 against P1's 0.349, from the subset, not the model.
 The exec accuracy is unaffected (the evalset is a fixed 200, the same for every run), and P7 vs P8 compare
-fairly with each other. For the real run the subset gets a fixed seed of its own (changed after the
-sweep, not during it, so P7 and P8 use the same code).
+fairly with each other. Fixed after the sweep (2026-10-25), so P7 and P8 ran the same code: every
+evaluation subset (the validation loss, the scored and sampled subsets, `data.nfl_val`) is drawn
+with `eval.subset_seed` (default 42, the subsets P1-P6 used), whatever the run's `seed`.
 
 **P8 couldn't train while the PC was in use (2026-10-24; it trained on 2026-10-25, below).** Started at
 16:32 with Rishi working on the PC, it
@@ -219,6 +220,30 @@ sweep pins the old rules (`SCORE_CHECKER = 3`, `ask-trainer evalrun --checker 3`
 exactly like P1-P7. The pilots' training data (the round-0 export) is unchanged too. Re-scoring
 every pilot under version 4 afterwards needs no GPU: `evalrun --checker 4 --no-wandb` on the saved
 `preds_llamacpp_*.jsonl`.
+
+**Re-scored under checker version 4 (2026-10-25, CPU and the trainer's Neo4j only).** The same saved
+answers, scored with the near-miss and rescue copies, into `scores_llamacpp_<tag>-checker4.json` next to
+the official version-3 files (no W&B). Re-scoring P1's final answers with `--checker 3` gave 34.97%
+again, so the differences are the checker's alone. Exec accuracy, version 3 -> 4:
+
+| | step 50 | step 100 | final |
+|---|---|---|---|
+| base | | | 30.6 -> 30.2 |
+| P1 (plain, lr 1e-4) | 33.2 -> 32.8 | 34.8 -> 33.9 | 35.0 -> 34.1 |
+| P2 (lr 2e-4) | 35.1 -> 34.2 | 33.7 -> 33.3 | 34.4 -> 34.1 |
+| P3 (lr 4e-4) | 33.5 -> 32.4 | 34.4 -> 33.9 | 34.1 -> 33.2 |
+| P4 (rank 64) | 34.6 -> 34.2 | 33.2 -> 32.6 | 33.5 -> 32.4 |
+| P5 (JEPA λ 1, k 0) | 36.2 -> 35.3 | 35.5 -> 34.4 | **36.3 -> 35.7** |
+| P6 (JEPA λ 0.5, k 1) | 31.5 -> 30.6 | 35.0 -> 34.2 | 35.3 -> 34.2 |
+| P7 (P1 at seed 7) | 33.3 -> 32.4 | 33.5 -> 33.2 | 35.2 -> 35.0 |
+| P8 (P5 at seed 7) | 37.3 -> 36.3 | 34.4 -> 33.5 | 35.5 -> 35.1 |
+
+Every score falls 0.2-1.1 points (answers version 3 passed that the near-miss copies show are wrong),
+and every decision of the sweep stands: P1 and P2 now tie (34.1%) and P1 wins on validation loss;
+rank 64 is still worse; P5 still beats P6 (35.7% vs 34.2%). Over the two seeds JEPA averages 35.4%
+against plain's 34.6% (+0.9). Plain's seed-to-seed difference grows to 0.9 points (34.1 vs 35.0) and
+JEPA's is 0.6, so at seed 7 JEPA's lead (+0.1) is inside the noise; at seed 42 it is +1.6. The reading
+is the same as under version 3: JEPA is ahead at both seeds, by about one question on average.
 
 **Paused twice at Rishi's request** (he needed the PC): before P5 (2026-10-21 22:02 to 2026-10-22 19:56)
 and after P7 (2026-10-23 00:55 to 2026-10-24 16:32; P7 had finished training and all three scores). `D:\nfl-ml-data\ask\finetune\HOLD` makes `ask-trainer train`

@@ -123,6 +123,37 @@ What the smoke test showed on the base model (one SQL question, temperature 0.6)
 calls at all three levels, and errors a fine-tune should remove (one call selected a column from
 the wrong table; one thinking-off call dropped the "won" condition).
 
+## Trace-generation speed (measured on the pilot run, 2026-10-25)
+
+The pilot trace run's round 1 (11,071 answers, 5.65 h, 16 slots, `--reasoning-budget 1024`) ran
+at 32.6 answers a minute: 242 generated + 405 prompt tokens a second, 745 prompt and 444
+generated tokens per answer, 29.4 s per answer. `llama-batched-bench` makes 796 tokens a second
+at 16; three measurements say where the difference goes:
+
+- **Not the client.** The 16 `tracegen` workers spent 100% of their time waiting on the server
+  (the sum of the answers' seconds over 16 x the wall time), and the inline check costs 3 ms an
+  SQL answer (6 ms with checker version 4) against ~29 s of generation.
+- **Prompts stall decoding.** From the server log's per-slot readings (every ~3 s), in 6-second
+  windows: with all 16 slots decoding, 301 tokens a second (18.8 a slot); with 15, 245; with
+  12-13 (the others processing a new prompt), 142-166. A new prompt arrives about every 2 s,
+  and a step that carries one is slow for every slot.
+- **The decoding steps themselves are ~2.6x slower than the bench's** (301 vs 796 at 16): the
+  bench decodes fixed tokens with no sampling and no arriving prompts; the server also samples
+  each slot's token on the CPU, through the default sampler chain, every step. A single slot
+  near the end of the run made 43 tokens a second (66 in a 3-s burst), against `llama-bench`'s
+  89.
+
+The settings to try are in `scripts/llamacpp/bench_trace.py` (GPU, ~10 minutes each; it replays
+one seeded sample of the run's questions, the real requests, with a minute's warm-up):
+`default` (as above), `np24` / `np32` (more slots, a bigger KV pool), `ub1024` (larger
+micro-batches, fewer prompt passes), `lean_samplers` (`--samplers top_k;top_p;min_p;temperature`:
+the default chain without the stages that do nothing at our settings, so the same distribution)
+and `upstream` (the clean b11779 build, without the fork's edits). Not run yet: the GPU was in use.
+
+```
+C:\Python314\python.exe scripts\llamacpp\bench_trace.py --minutes 8
+```
+
 ## Later
 
 - **The fine-tuned model in llama.cpp.** Either merge the LoRA into the bf16 weights

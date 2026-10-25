@@ -129,6 +129,19 @@ def test_latest_and_mix(tmp_path):
     assert {e.id for e in other.train} != {e.id for e in m.train}
 
 
+def test_val_subsets_follow_subset_seed_not_the_runs_seed(tmp_path):
+    paths = _paths(tmp_path)
+    _export(paths)
+    cfg = TrainConfig.model_validate({"data": {"nfl_route": 4, "nfl_val": 5}})
+    assert cfg.eval.subset_seed == 42  # the subsets pilots P1-P6 (seed 42) used
+    m = load_mix(cfg, paths)
+    seed7 = load_mix(cfg.model_copy(update={"seed": 7}), paths)
+    assert [e.id for e in seed7.val] == [e.id for e in m.val] and len(m.val) == 5
+    assert {e.id for e in seed7.train} != {e.id for e in m.train}  # training data still varies
+    other = cfg.model_copy(update={"eval": cfg.eval.model_copy(update={"subset_seed": 1})})
+    assert {e.id for e in load_mix(other, paths).val} != {e.id for e in m.val}
+
+
 def test_nfl_is_off_by_default(tmp_path):
     paths = _paths(tmp_path)  # no NFL export at all: the default mix must not need one
     pub = paths.public / "gretel"

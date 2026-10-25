@@ -128,3 +128,36 @@ def test_the_sweep_plans_by_the_pre_registered_rule():
     cfg = sw.merged(sw.BASE, plan["P8"])
     assert cfg["optim"]["grad_accum"] == 32 and cfg["optim"]["lr"] == 4e-4 and cfg["seed"] == 7
     assert sw._wsl(Path(r"D:\nfl-ml-data\ask\x.jsonl")) == "/mnt/d/nfl-ml-data/ask/x.jsonl"
+
+
+def _bench():
+    spec = importlib.util.spec_from_file_location(
+        "bench_trace", REPO / "scripts" / "llamacpp" / "bench_trace.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_trace_bench_replays_one_sample_and_counts_the_window():
+    bt = _bench()
+
+    class FakeRun:
+        questions = [{"qid": f"q{i}", "plan": {("high", "low")[i % 2]: 2}} for i in range(10)]
+
+        def plan_of(self, q):
+            return q["plan"]
+
+    a, b = bt.sample(FakeRun(), 4), bt.sample(FakeRun(), 4)
+    assert a == b and len(a) == 4  # the same requests for every configuration
+    assert all(level == next(iter(q["plan"])) and rid.endswith("#bench") for rid, q, level, _ in a)
+    done = [
+        {"end": 5, "secs": 9, "completion_tokens": 999, "prompt_tokens": 9},  # warm-up: not counted
+        {"end": 70, "secs": 20, "completion_tokens": 300, "prompt_tokens": 600},
+        {"end": 120, "secs": 30, "completion_tokens": 300, "prompt_tokens": 600},
+        {"end": 100, "secs": 0, "completion_tokens": 0, "prompt_tokens": 0, "error": "x"},
+    ]
+    s = bt.summarize(done, 60, 180, slots=2)
+    assert s["answers"] == 2 and s["gen_tok_s"] == 5.0 and s["prompt_tok_s"] == 10.0
+    assert s["answers_per_min"] == 1.0 and s["per_slot_gen_tok_s"] == 2.5 and s["errors"] == 1
+    assert set(bt.CONFIGS) >= {"default", "np24", "lean_samplers", "upstream"}

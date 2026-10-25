@@ -131,6 +131,9 @@ class EvalConfig(_Strict):
     gen_prefill_tokens: int = 14000
     val_batch: int = 2
     val_loss_n: int = -1  # val examples in the val loss (-1 = all; else stratified, fixed)
+    # draws the fixed subsets above (and data.nfl_val's), whatever the run's `seed`: runs at
+    # different seeds measure the same examples (42 = the subsets pilots P1-P6 used)
+    subset_seed: int = 42
     verify_timeout_s: int = 1800
 
 

@@ -180,7 +180,7 @@ def predict_cmd(args) -> int:
     cfg, _, model, tok, adapter = _load_run(run, args.device)
     examples = list(read_jsonl(Path(args.data)))
     if args.n:
-        examples = stratified_subset(examples, args.n, cfg.seed)
+        examples = stratified_subset(examples, args.n, cfg.eval.subset_seed)
     ct = ChatTokenizer(tok, cfg.optim.max_len)
     preds = predict(model, ct, examples, cfg.eval.max_new_tokens, args.device,
                     batch_size=cfg.eval.gen_batch,
