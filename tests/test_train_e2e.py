@@ -102,6 +102,27 @@ def test_train_crash_resume_equals_straight_run(env):
     assert ("adapter", ("latest", "final")) in artifacts
 
 
+def test_a_pause_stops_at_a_checkpoint_and_the_resume_loses_nothing(env):
+    """`<runs>/PAUSE`: the run stops right after its next checkpoint (every 3 steps here), the
+    PC can be switched off, and the resume gives exactly the uninterrupted run."""
+    paths, cfg, _ = env
+    a = train_mod.train(cfg, name="a", paths=paths, device="cpu")
+    pause = paths.runs / "PAUSE"
+    pause.write_text("", encoding="utf-8")
+    p = train_mod.train(cfg, name="p", paths=paths, device="cpu")
+    assert not (p / "DONE").exists() and (p / "PAUSED").read_text().strip() == "3"
+    assert sorted(_ce(p)) == [1, 2, 3]  # nothing ran past the checkpoint
+    kinds = [json.loads(x)["kind"] for x in (p / "events.jsonl").read_text().splitlines()]
+    assert kinds[-2:] == ["checkpoint_saved", "paused"]
+    pause.unlink()
+    assert train_mod.train(resume="p", paths=paths, device="cpu") == p
+    assert (p / "DONE").exists() and not (p / "PAUSED").exists()
+    assert _ce(p) == pytest.approx(_ce(a), abs=1e-9) and sorted(_ce(p)) == list(range(1, 9))
+    wa = load_file(str(a / "adapter" / "adapter_model.safetensors"))
+    wp = load_file(str(p / "adapter" / "adapter_model.safetensors"))
+    assert all(torch.equal(wa[k], wp[k]) for k in wa)
+
+
 def test_resume_refuses_changed_data(env):
     paths, cfg, _ = env
     train_mod.train(cfg, name="c", paths=paths, device="cpu", stop_after=3)

@@ -4,8 +4,9 @@ Both are for the live dashboard, which reads the run folder while it trains. App
 JSON object per line: `{"ts": <UTC ISO>, "step": <int or null>, "kind": ..., ...fields}`.
 Kinds: start, data_ready, model_loaded, resumed, eval_start, eval_end, oom_split,
 verifier_failed, checkpoint_saved, artifact_uploaded, artifact_failed, epoch_end, done,
-crashed. Fields are numbers, names and short codes only: never an exception's text (it could
-quote a path, a query or worse), never anything secret.
+crashed, val_loss, best, paused (stopped at a checkpoint on request). Fields are numbers,
+names and short codes only: never an exception's text (it could quote a path, a query or
+worse), never anything secret.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from typing import Any
 KINDS = {
     "start", "data_ready", "model_loaded", "resumed", "eval_start", "eval_end", "oom_split",
     "verifier_failed", "checkpoint_saved", "artifact_uploaded", "artifact_failed",
-    "epoch_end", "done", "crashed", "val_loss", "best",
+    "epoch_end", "done", "crashed", "val_loss", "best", "paused",
 }  # fmt: skip
 
 

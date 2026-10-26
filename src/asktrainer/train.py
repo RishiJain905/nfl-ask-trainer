@@ -136,6 +136,7 @@ class LoopResult:
     final_adapter: Path | None = None
     history: list[dict[str, Any]] = field(default_factory=list)
     dropped_too_long: list[str] = field(default_factory=list)
+    paused: bool = False  # stopped at a checkpoint on request (`PAUSE`): resume to go on
 
 
 def _peak_gb(device) -> float | None:
@@ -163,6 +164,9 @@ def free_cuda(device) -> None:
 def _sync(device) -> None:
     if torch.device(device).type == "cuda" and torch.cuda.is_available():
         torch.cuda.synchronize(device)
+
+
+PAUSE_FILE = "PAUSE"  # in the runs folder: every run stops after its next checkpoint
 
 
 def _mode(f: Features) -> str | None:
@@ -260,7 +264,9 @@ def run_loop(
     full resumable state is written every `checkpoint.every_steps` steps (after that step's
     evaluation) and after each epoch's end; `resume_from` (a checkpoint folder) restores it
     and continues from the exact position, so the run is the same as an uninterrupted one.
-    `stop_after` stops dead after that many steps, as a crash would (tests)."""
+    `stop_after` stops dead after that many steps, as a crash would (tests). A `PAUSE` file
+    next to the run folder (`<runs>/PAUSE`) stops the loop right after its next checkpoint,
+    with nothing lost (`result.paused`; the run folder gets `PAUSED`, removed on resume)."""
     from transformers import get_cosine_schedule_with_warmup
 
     o, j = cfg.optim, cfg.jepa
@@ -290,6 +296,11 @@ def run_loop(
     def save(st: LoopState) -> None:
         if checkpointer is not None:
             checkpointer.save(model, opt, sched, st, gate)
+            if torch.device(device).type == "cuda":
+                # hand the allocator's cached blocks back: on WSL a cache grown over a long run
+                # can fail to be made resident (pilot P9 stalled at step 173 that way); the
+                # numbers don't change, the next step only allocates afresh
+                torch.cuda.empty_cache()
 
     every_eval = cfg.eval.every_steps
     every_loss = cfg.eval.loss_every_steps
@@ -367,6 +378,12 @@ def run_loop(
                                       save_embedding_layers=False)  # fmt: skip
             if checkpointer is not None and checkpointer.due(step) and not last_of_epoch:
                 save(state)
+                if (run_dir.parent / PAUSE_FILE).exists():  # a pause: the checkpoint has it all
+                    events.emit("paused", step=step)
+                    (run_dir / "PAUSED").write_text(f"{step}\n", encoding="utf-8")
+                    result.steps, result.paused = step, True
+                    result.history = logger.history
+                    return result
             if stop_after is not None and step >= stop_after:
                 result.steps = step
                 result.history = logger.history
@@ -611,6 +628,7 @@ def train(
         if ckpt is None:
             raise FileNotFoundError(f"no complete checkpoint under {cfg.checkpoint.root(run_name)}")
         wandb_id = read_meta(ckpt).get("wandb_id")
+        (run_dir / "PAUSED").unlink(missing_ok=True)  # going on after a pause
     else:
         if cfg is None:
             raise ValueError("a config (or resume) is required")

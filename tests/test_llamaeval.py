@@ -170,3 +170,35 @@ def test_the_trace_bench_replays_one_sample_and_counts_the_window():
     assert s["answers"] == 2 and s["gen_tok_s"] == 5.0 and s["prompt_tok_s"] == 10.0
     assert s["answers_per_min"] == 1.0 and s["per_slot_gen_tok_s"] == 2.5 and s["errors"] == 1
     assert set(bt.CONFIGS) >= {"default", "np24", "lean_samplers", "upstream"}
+
+
+def _real():
+    spec = importlib.util.spec_from_file_location("real_run", REPO / "scripts" / "real_run.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_real_run_watchdog_and_adapter_list(tmp_path):
+    rr = _real()
+    t0 = 1_000_000.0
+    # before this launch's first step: only the long start-up limit applies
+    assert not rr.stalled(t0 + rr.STALL_S + 60, t0, t0, armed=False)
+    assert rr.stalled(t0 + rr.START_S, t0, t0, armed=False)
+    # once stepping: no progress for STALL_S (counted from the launch at the earliest)
+    assert not rr.stalled(t0 + 600, t0, t0 + 100, armed=True)
+    assert rr.stalled(t0 + 100 + rr.STALL_S, t0, t0 + 100, armed=True)
+    run = tmp_path / "sft-main"
+    run.mkdir()
+    assert rr.last_step(run) == 0 and rr.progress_mtime(run) == 0.0
+    (run / "train_log.jsonl").write_text('{"step": 3}\n{"step": 5, "val/loss": 1}\n{"st', "utf-8")
+    assert rr.last_step(run) == 5  # a half-written last line is skipped
+    for d in ("adapter_step001000", "adapter_step000500", "adapter", "adapter_epoch1"):
+        (run / d).mkdir()
+    assert rr.adapter_tags(run) == [("adapter_step000500", "step000500", 500),
+                                    ("adapter_step001000", "step001000", 1000),
+                                    ("adapter", "final", 5)]  # fmt: skip
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text("# x\nname: sft-main\nseed: 42\n", encoding="utf-8")
+    assert rr._yaml_name(cfg) == "sft-main"
+    assert rr.PAUSE.name == "PAUSE" and rr.PAUSE.parent.name == "finetune"

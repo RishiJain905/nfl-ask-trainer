@@ -1,22 +1,28 @@
-# DRAFT (not run yet: Rishi reviews the architecture first).
-# The general database agent, full size: ~52M tokens, one epoch.
-#   ask-trainer train --config configs/general_full.yaml [--jepa] --seed 42
-#   ask-trainer train --resume <run>            # after a crash / power cut
+# The real run (approved by Rishi, 2026-10-26, after pilot P9): the general SQL + Cypher agent.
+#   C:\Python314\python.exe scripts\real_run.py            # train (watchdog, pause), then score
+#   (by hand: ask-trainer train --config configs/general_full.yaml --name sft-main
+#             ask-trainer train --resume sft-main          # after a crash / power cut)
 #
-# Examples: sqale 30,000 (27.67M tokens), text2cypher 27,084 (all, 17.52M), gretel 20,000
-# (~7.1M), cypherbench 4,000 (~2.5M): 81,084 examples / 32 per step = 2,534 optimizer steps.
-# At ~950 tok/s that is ~15 h of training, plus ~6 evaluations.
-name: general-full
+# Data (docs/traces.md, "Gold answers, validation and the held-out tests"):
+#   traces-pilot-full  the trace run's passes, both rounds, checker 4: 4,196 train + 466 val,
+#                      thinking on (and the few `off` passes)
+#   gold-full          the datasets' own queries as thinking-off calls for every other training
+#                      question (SQaLe 27,887, gretel 28,695, text2cypher 25,871, CypherBench
+#                      8,096) + 400 val (100 a set, never traced)
+#   94,745 examples / 32 per step = 2,961 optimizer steps, ~66M tokens: ~23 h at P9's ~815
+#   tokens/s, plus the validation passes. Not trained on: the evalset (200) and the testset
+#   (1,000), the datasets' own test splits, scored after training.
+#
+# Settings: P9's (= P1's, the sweep's plain winner): plain objective, lr 1e-4, rank 16.
+name: sft-main
 seed: 42
 data:
-  nfl_route: 0
+  nfl_route: 0           # the NFL track is parked
   nfl_generate: 0
   nfl_val: 0
   public:
-    sqale: {train: 30000, val: 50}
-    text2cypher: {train: -1, val: 50}
-    gretel: {train: 20000, val: 50}
-    cypherbench: {train: 4000, val: 50}
+    traces-pilot-full: {train: -1, val: -1}
+    gold-full: {train: -1, val: -1}
 lora:
   r: 16
   alpha: 32
@@ -27,10 +33,11 @@ optim:
   epochs: 1
   batch: 1
   grad_accum: 32
-  warmup: 0.03
-  weight_decay: 0.0
+  warmup: 0.03           # 89 steps
+  warmup_min_steps: 10
+  weight_decay: 0.01
   max_grad_norm: 1.0
-  max_len: 3072
+  max_len: 4096          # the longest example is ~3,090 tokens
   attn_chunk: 1024
   attn_chunk_above: 3072
   hipblaslt: true
@@ -38,25 +45,20 @@ optim:
   pad_to: 0
 jepa:
   enabled: false
-  lam: 2.0
-  k: 0
-  distance: cosine
-  ratio: 1.0
 eval:
-  every_epoch: true
-  every_steps: 500
-  public_n: 200
-  val_loss_n: -1
-  max_new_tokens: {route: 96, generate: 512}
-  gen_batch: 8
-  gen_prefill_tokens: 14000
+  every_epoch: true      # the validation loss at the end
+  every_steps: 0         # no generation inside the trainer: llama.cpp scores the adapters after
+  loss_every_steps: 100  # the validation loss (val/loss/thinking_on, _off, per dataset)
+  public_n: 0
+  val_loss_n: 400        # a fixed, stratified 400 of the 866 (~2 minutes a pass)
   val_batch: 2
   nfl_n: 0
   nfl_verify: false
 checkpoint:
   dir: /mnt/f/nfl-ask-trainer-ckpt
-  every_steps: 20
+  every_steps: 20        # ~11 minutes; the allocator's cache is released at each one
   keep: 2
+  adapter_every_steps: 500   # adapter_step000500 ... 002500, scored after training
   artifacts: true
   artifact_name: ask-finetune-adapter
 log_every: 1

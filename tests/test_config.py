@@ -34,24 +34,24 @@ def test_shipped_configs_load(name):
 
 
 def test_general_configs_match_the_brief():
-    pilot = TrainConfig.from_yaml(CONFIG_DIR / "general_pilot.yaml")
+    pilot = TrainConfig.from_yaml(CONFIG_DIR / "general_pilot.yaml")  # the pre-trace draft
+    assert (pilot.optim.batch, pilot.optim.grad_accum, pilot.optim.max_len) == (1, 32, 3072)
+    assert set(pilot.data.public) == {"sqale", "gretel", "text2cypher", "cypherbench"}
+    # the real run as approved (2026-10-26): all traces + the gold answers, P9's settings
     full = TrainConfig.from_yaml(CONFIG_DIR / "general_full.yaml")
-    for c in (pilot, full):
-        assert (c.optim.batch, c.optim.grad_accum, c.optim.max_len, c.optim.lr) == (
-            1,
-            32,
-            3072,
-            1e-4,
-        )
-        assert (c.checkpoint.every_steps, c.checkpoint.keep) == (20, 2)
-        assert set(c.data.public) == {"sqale", "gretel", "text2cypher", "cypherbench"}
-    assert pilot.eval.every_steps == 100 and full.eval.every_steps == 500
-    assert {k: v.train for k, v in full.data.public.items()} == {
-        "sqale": 30000,
-        "text2cypher": -1,
-        "gretel": 20000,
-        "cypherbench": 4000,
+    assert full.name == "sft-main" and full.seed == 42 and full.objective == "plain"
+    assert {k: (v.train, v.val) for k, v in full.data.public.items()} == {
+        "traces-pilot-full": (-1, -1),
+        "gold-full": (-1, -1),
     }
+    o = full.optim
+    assert (o.batch, o.grad_accum, o.max_len, o.lr, o.epochs) == (1, 32, 4096, 1e-4, 1)
+    assert (o.warmup, o.warmup_min_steps, o.weight_decay, o.max_grad_norm) == (0.03, 10, 0.01, 1.0)
+    assert (full.lora.r, full.lora.alpha, full.lora.dropout) == (16, 32, 0.05)
+    assert (full.checkpoint.every_steps, full.checkpoint.keep) == (20, 2)
+    assert full.checkpoint.adapter_every_steps == 500
+    e = full.eval
+    assert (e.every_steps, e.loss_every_steps, e.val_loss_n) == (0, 100, 400)
 
 
 def test_plain_and_jepa_differ_only_in_jepa():
