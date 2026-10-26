@@ -272,7 +272,7 @@ No pilot mixed in gold answers, so P9 checks it first, as cheaply as a fair comp
 **The run.** P1 exactly (plain, lr 1e-4, rank 16, seed 42, the same 3,415 traces) plus `gold-p9`:
 4,235 gold examples, 3.06M tokens (P1's traces are 3.04M), on questions never traced, in the real
 run's proportions (SQaLe 1,565, text2cypher 1,430, gretel 1,035, CypherBench 205). 7,650 examples,
-239 steps. Validation: the traces' 379 plus 100 gold (25 a set, never traced); the loss on a fixed
+240 steps (the last holds 2 examples). Validation: the traces' 379 plus 100 gold (25 a set, never traced); the loss on a fixed
 300 of them every 100 steps, with `val/loss/thinking_on` and `val/loss/thinking_off` (new). Only the
 final adapter is scored (checker 3 into W&B like every pilot, and checker 4 next to it).
 
@@ -315,5 +315,5 @@ the larger page file). Stopped after 10 minutes and resumed from the step-160 ch
 (`pilot-p9.train.stall1-step173.log` kept): the same batches passed at 10-11 GB with the fresh
 allocator, so the cause was the cached allocator's growth over a long run rather than one batch. The
 real run is ~10x longer, so it gets a guard rather than luck: the allocator's cache released at
-every checkpoint, and a watchdog that resumes a run stuck for 10 minutes from its last checkpoint
+every checkpoint, and a watchdog that resumes a run stuck for 15 minutes from its last checkpoint
 (planned with the real run's config).

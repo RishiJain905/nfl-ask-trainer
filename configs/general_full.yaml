@@ -56,7 +56,7 @@ eval:
   nfl_verify: false
 checkpoint:
   dir: /mnt/f/nfl-ask-trainer-ckpt
-  every_steps: 20        # ~11 minutes; the allocator's cache is released at each one
+  every_steps: 20        # ~9 minutes; the allocator's cache is released at each one
   keep: 2
   adapter_every_steps: 500   # adapter_step000500 ... 002500, scored after training
   artifacts: true

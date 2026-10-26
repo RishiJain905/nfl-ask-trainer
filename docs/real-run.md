@@ -42,7 +42,7 @@ with the scores and every resume, `sft-main.train.log`, `driver.pid`). The run i
 
 1. Create the file `D:\nfl-ml-data\ask\finetune\PAUSE` (empty is fine).
 2. The trainer finishes the step it is on, writes its next checkpoint (every 20 steps, so within
-   ~11 minutes), writes `sft-main\PAUSED` (the step) and exits on its own; the driver exits with
+   ~9 minutes), writes `sft-main\PAUSED` (the step) and exits on its own; the driver exits with
    `phase: paused` in `status.json`. **Nothing is lost**: the checkpoint holds the LoRA weights,
    the optimizer's moments, the schedule, every random-number state and the position in the data,
    and nothing runs past it. A CPU test stops a run this way and resumes it: the losses and the
@@ -54,7 +54,7 @@ with the scores and every resume, `sft-main.train.log`, `driver.pid`). The run i
    same line.
 
 **Without a pause** (a power cut, a crash, a hard switch-off): the resume starts from the last
-checkpoint, so at most 20 steps (~11 minutes) are redone, with the same result. Pausing first is
+checkpoint, so at most 20 steps (~9 minutes) are redone, with the same result. Pausing first is
 still better: the run folder is on D: (a USB drive, exFAT), and a switch-off in the middle of a
 write can damage the file system (it happened once, `docs/d-drive-repair.md`); the checkpoints
 themselves are on F: and written to a temporary folder first.
