@@ -291,3 +291,29 @@ alone, and more traces (another trace run, where the trace-speed work matters) c
 
 Run (GPU, one job at a time): `docker start asktrainer-neo4j` if needed, then
 `C:\Python314\python.exe scripts\pilot_sweep.py --traces pilot --only P9`.
+
+**Result (2026-10-26 01:03 UTC): P9 passes by a wide margin.** Final exec accuracy on the evalset:
+
+| | checker 4 | checker 3 | decided / correct (v4) | CypherBench | gretel | SQaLe | text2cypher |
+|---|---|---|---|---|---|---|---|
+| base | 30.2% | 30.6% | | | | | |
+| P1 (traces only) | 34.05% | 34.97% | 185 / 63 | 30.0 | 60.0 | 31.1 | 10.0 |
+| P5 (best of the sweep, JEPA) | 35.7% | 36.3% | 182 / 65 | | | | |
+| **P9 (P1 + gold)** | **41.76%** | **41.9%** | 182 / 76 | 44.0 | 64.0 | 38.6 | 13.2 |
+
++7.7 points over P1 (13 more correct answers of ~182), against a bar of +1 and a seed-to-seed
+difference of 0.9; every dataset gains, CypherBench and SQaLe the most. The health check holds: a
+thought on all 200 questions, median 802 characters (P1 826), median 276 generated tokens (P1 282);
+4 answers ended without a call (P1 2). Fewer answers fail to parse (15 syntax errors vs 27). The
+validation loss: thinking on 0.356 -> 0.354 (steps 100 -> 200), thinking off 0.187 -> 0.169, overall
+0.336 at the end. So the real run trains on the traces plus the gold answers. W&B run: `pilot-p9`.
+
+**A stall at step 173, resumed.** After step 173 (its highest peak so far, 12.0 GB) the trainer
+stopped making steps while using ~320% CPU, the GPU idle; WSL's kernel log showed `dxgkio_make_resident:
+Ioctl failed: -12` (the GPU paravirtualisation out of memory), not a commit shortage (22 GB free with
+the larger page file). Stopped after 10 minutes and resumed from the step-160 checkpoint
+(`pilot-p9.train.stall1-step173.log` kept): the same batches passed at 10-11 GB with the fresh
+allocator, so the cause was the cached allocator's growth over a long run rather than one batch. The
+real run is ~10x longer, so it gets a guard rather than luck: the allocator's cache released at
+every checkpoint, and a watchdog that resumes a run stuck for 10 minutes from its last checkpoint
+(planned with the real run's config).
