@@ -6,7 +6,7 @@ files, never from typed-in numbers. Two pages, one per stage:
 | Page | Holds | URL |
 |---|---|---|
 | **Spark SFT Trials** (`spark-sft-trials.html`) | smoke runs and the pilot sweep | https://claude.ai/artifact/FWzig1Kco8arSVFh7yzDZJ |
-| **Spark SFT Main Run** (a copy of the same HTML under a new file name → a new artifact with its own data store) | the real run only | made when the real run starts |
+| **Spark SFT Main Run** (`spark-sft-main.html`: a copy of the same HTML under a new file name → a new artifact with its own data store) | the real run only (`sft-main`) | https://claude.ai/artifact/DFkJVKtxq1N2tuGec7WjTT |
 
 The trials page keeps every smoke and pilot run; the main-run page starts empty, so nothing is
 ever overwritten or mixed.
