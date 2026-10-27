@@ -273,12 +273,14 @@ def _driver(tmp_path, monkeypatch, score, crashes=()):
     monkeypatch.setattr(rr.time, "sleep", lambda s: None)
     stops = []
 
-    def popen(*a, **k):
+    def popen(argv, **k):
         stops.append(rr.last_step(run))
+        m.cmds.append(argv[-1])
         return _FakeTrainer(run, pause, stops[-1], crashes)
 
     monkeypatch.setattr(rr.subprocess, "Popen", popen)
     m = rr.Main.__new__(rr.Main)  # no state on D:
+    m.cmds = []
     m.name, m.dir, m.run_dir, m._plan = "sft-main", tmp_path, run, None
     m.state = {"run": "sft-main", "resumes": [], "scores": {}, "log": []}
     m.statuses = []
@@ -349,6 +351,8 @@ def _scored(m, tag, step, wandb):
 def test_crashes_now_and_then_are_resumed_and_the_run_finishes(tmp_path, monkeypatch):
     rr, m, pause, stops = _driver(tmp_path, monkeypatch, _scored, crashes=[15, 45])
     assert m.train() == "done"
+    # every launch keeps PyTorch's GPU cache below what Windows keeps resident
+    assert all(f"PYTORCH_HIP_ALLOC_CONF={rr.ALLOC_CONF}" in c for c in m.cmds) and m.cmds
     assert [r["step"] for r in m.state["resumes"]] == [15, 45]
     assert stops == [0, 15, 30, 45, 60]  # each crash resumed from its checkpoint (10, 40)
     assert list(m.state["scores"]) == ["step000030", "step000060"]

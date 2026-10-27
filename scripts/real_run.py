@@ -66,6 +66,11 @@ START_S = 90 * 60  # before this launch's first step: tokenizing ~95k examples, 
 # loop), with a high cap on the whole run as a backstop.
 MAX_RESUMES_IN_A_ROW = 3
 MAX_RESUMES = 30
+# PyTorch's cache of GPU memory grew to 14.4-15.6 GB of the card's 16 (the trainer's own peak is
+# ~10.7-12.4): more than Windows keeps resident for WSL, so `dxgkio_make_resident` failed and the
+# HIP runtime segfaulted in the backward pass (step 810, twice). Reclaim cached blocks once the
+# cache passes 80% of the card, and don't split big blocks (fragmentation). Numbers unchanged.
+ALLOC_CONF = "garbage_collection_threshold:0.8,max_split_size_mb:256"
 CHECKER, ALSO = 4, 3  # into W&B / beside it (the pilots' official scores were version 3)
 TEST_TAG = "test"
 
@@ -272,7 +277,9 @@ class Main(ps.Sweep):
             start_step, launched = last_step(self.run_dir), time.time()
             self.status(phase="training", note="resumed" if resume else "started",
                         step=start_step)  # fmt: skip
-            full = f"cd {ps.WSL_REPO} && source ~/venvs/nfl-ask-trainer/bin/activate && {cmd}"
+            full = (f"cd {ps.WSL_REPO} && source ~/venvs/nfl-ask-trainer/bin/activate && "
+                    f"export PYTORCH_ALLOC_CONF={ALLOC_CONF} PYTORCH_HIP_ALLOC_CONF={ALLOC_CONF}"
+                    f" && {cmd}")  # fmt: skip
             with log.open("a", encoding="utf-8") as f:
                 proc = subprocess.Popen(["wsl", "-d", "Ubuntu", "--", "bash", "-lc", full],
                                         stdout=f, stderr=subprocess.STDOUT)  # fmt: skip

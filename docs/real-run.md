@@ -83,6 +83,15 @@ Pilot P9 stopped making steps once (step 173: the GPU idle, the trainer spinning
   in the 2.5 hours before, most of them harmless. The first limit (6 resumes in the whole run)
   could have stopped a healthy run over ~20 hours at that rate, hence the rule above (Rishi was
   told, 2026-10-27).
+- **The resume crashed again at the same step** (810, in the backward pass, the same instruction),
+  so the driver stopped (no progress). The GPU monitor showed why: PyTorch's cache of GPU memory
+  sat at 14.4-15.6 GB of the 16 GB while the trainer's own peak is ~10.7-12.4 GB, and both crashes
+  came at ~14.5-14.8 GB (the 01:08 failure at 15.4 GB with under 1 GB of system RAM free). Step
+  810's batch needs a larger block than the fragmented cache had, so the cache grew past what
+  Windows keeps resident. The driver now starts the trainer with
+  `PYTORCH_ALLOC_CONF` / `PYTORCH_HIP_ALLOC_CONF` = `garbage_collection_threshold:0.8,max_split_size_mb:256`
+  (`real_run.ALLOC_CONF`): unused cached blocks are freed once the cache passes 80% of the card,
+  and big blocks aren't split. It changes how memory is cached, not what is computed.
 
 ## What gets saved
 
