@@ -353,6 +353,7 @@ def test_crashes_now_and_then_are_resumed_and_the_run_finishes(tmp_path, monkeyp
     assert m.train() == "done"
     # every launch keeps PyTorch's GPU cache below what Windows keeps resident
     assert all(f"PYTORCH_HIP_ALLOC_CONF={rr.ALLOC_CONF}" in c for c in m.cmds) and m.cmds
+    assert all(f"ASKTRAINER_GPU_MEMORY_FRACTION={rr.GPU_FRACTION}" in c for c in m.cmds)
     assert [r["step"] for r in m.state["resumes"]] == [15, 45]
     assert stops == [0, 15, 30, 45, 60]  # each crash resumed from its checkpoint (10, 40)
     assert list(m.state["scores"]) == ["step000030", "step000060"]

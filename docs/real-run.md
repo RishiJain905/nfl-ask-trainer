@@ -88,10 +88,21 @@ Pilot P9 stopped making steps once (step 173: the GPU idle, the trainer spinning
   sat at 14.4-15.6 GB of the 16 GB while the trainer's own peak is ~10.7-12.4 GB, and both crashes
   came at ~14.5-14.8 GB (the 01:08 failure at 15.4 GB with under 1 GB of system RAM free). Step
   810's batch needs a larger block than the fragmented cache had, so the cache grew past what
-  Windows keeps resident. The driver now starts the trainer with
-  `PYTORCH_ALLOC_CONF` / `PYTORCH_HIP_ALLOC_CONF` = `garbage_collection_threshold:0.8,max_split_size_mb:256`
-  (`real_run.ALLOC_CONF`): unused cached blocks are freed once the cache passes 80% of the card,
-  and big blocks aren't split. It changes how memory is cached, not what is computed.
+  Windows keeps resident. After every checkpoint (which empties the cache) it climbed ~0.4 GB a
+  step: 11.7 GB at step 820, the card full by 834, where the trainer stalled.
+- **The fix: a cap on PyTorch's share of the card.** The driver starts the trainer with
+  `ASKTRAINER_GPU_MEMORY_FRACTION=0.8` (`train.limit_cuda` calls
+  `torch.cuda.set_per_process_memory_fraction`: 12.64 GiB of the 15.80 PyTorch sees) and
+  `PYTORCH_ALLOC_CONF` / `PYTORCH_HIP_ALLOC_CONF` = `garbage_collection_threshold:0.9,max_split_size_mb:256`
+  (`real_run.ALLOC_CONF`). Near the cap the allocator frees cached blocks instead of asking for
+  more; a request past it fails as a plain out-of-memory error (a resume) instead of a crash in the
+  runtime. The largest step so far needed 12.36 GB (11.5 GiB), so there is ~1.1 GiB of room. The
+  first try, the allocator settings alone, did nothing: PyTorch's garbage collection only works
+  with a cap. Checked on the card before the restart (a fragmented 6 GiB cache gave way to a
+  9 GiB block within the cap; a block past it was refused). It changes how memory is cached, not
+  what is computed. **Measured** (steps 821-850, past the step-835 stall, 2026-10-27): GPU memory
+  at most 12.9 GiB (median 12.1) where it had climbed to 15.8, no residency failure since, and
+  ~759 tokens/s against ~770 (1-2% slower). The `model_loaded` event records `gpu_fraction`.
 
 ## What gets saved
 

@@ -227,3 +227,12 @@ def test_generation_splits_a_batch_that_runs_out_of_memory(tiny_tok):
     prompts = [ct.prompt_ids(example(i)) for i in range(3)]
     out = generate(model, prompts, 3, ct.pad_id, ct.eos_id, "cpu", batch_size=3)
     assert sizes[0] == 3 and len(out) == 3 and sizes.count(1) == 3
+
+
+def test_the_gpu_memory_cap_is_off_unless_asked_and_never_on_the_cpu(monkeypatch):
+    from asktrainer import train
+
+    monkeypatch.delenv(train.GPU_FRACTION_VAR, raising=False)
+    assert train.limit_cuda("cpu") is None
+    monkeypatch.setenv(train.GPU_FRACTION_VAR, "0.8")
+    assert train.limit_cuda("cpu") is None  # a cap on the card only

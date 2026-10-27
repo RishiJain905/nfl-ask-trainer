@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import platform
 import subprocess
 import time
@@ -159,6 +160,25 @@ def free_cuda(device) -> None:
     """Return cached blocks to the allocator (the eval's shapes differ from training's)."""
     if torch.device(device).type == "cuda" and torch.cuda.is_available():
         torch.cuda.empty_cache()
+
+
+GPU_FRACTION_VAR = "ASKTRAINER_GPU_MEMORY_FRACTION"
+
+
+def limit_cuda(device) -> float | None:
+    """Cap PyTorch's share of the card when ASKTRAINER_GPU_MEMORY_FRACTION is set (e.g. 0.8).
+    Under WSL the caching allocator otherwise grows towards the whole 16 GB, past what Windows
+    keeps resident for WSL (sft-main: segfaults at step 810, a stall at 835); with a cap, cached
+    blocks are freed before it is reached, and PYTORCH_ALLOC_CONF's garbage_collection_threshold
+    works at all (it needs a cap). A machine setting, not a training one: the numbers don't
+    change, so it isn't in the config."""
+    frac = os.getenv(GPU_FRACTION_VAR)
+    dev = torch.device(device)
+    if frac and dev.type == "cuda" and torch.cuda.is_available():
+        index = dev.index if dev.index is not None else torch.cuda.current_device()  # "cuda" alone
+        torch.cuda.set_per_process_memory_fraction(float(frac), index)
+        return float(frac)
+    return None
 
 
 def _sync(device) -> None:
@@ -718,13 +738,15 @@ def _train(cfg, paths, run_dir, run_name, launched_by, ckpt, wandb_id, device, s
                 dropped=len(drop_train) + len(drop_val), val_examples=len(val_feats),
                 eval_generate=len(nfl_subset) + len(public_subset))  # fmt: skip
 
+    gpu_fraction = limit_cuda(device)
     model, tok, load_info = load_base(cfg.base_model_path(paths), device=device)
     if cfg.optim.attn_chunk > 0:
         use_chunked(model, chunk=cfg.optim.attn_chunk, threshold=cfg.optim.attn_chunk_above)
     seed_everything(cfg.seed)  # the LoRA init is drawn here: the same seed, the same start
     model = apply_lora(model, cfg.lora, cfg.optim.gradient_checkpointing)
     events.emit("model_loaded", seconds=load_info["load_s"], peak_gb=_peak_gb(device),
-                trainable_m=round(trainable_params(model) / 1e6, 2))  # fmt: skip
+                trainable_m=round(trainable_params(model) / 1e6, 2),
+                gpu_fraction=gpu_fraction)  # fmt: skip
 
     env = environment()
     if not resume:

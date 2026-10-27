@@ -68,9 +68,12 @@ MAX_RESUMES_IN_A_ROW = 3
 MAX_RESUMES = 30
 # PyTorch's cache of GPU memory grew to 14.4-15.6 GB of the card's 16 (the trainer's own peak is
 # ~10.7-12.4): more than Windows keeps resident for WSL, so `dxgkio_make_resident` failed and the
-# HIP runtime segfaulted in the backward pass (step 810, twice). Reclaim cached blocks once the
-# cache passes 80% of the card, and don't split big blocks (fragmentation). Numbers unchanged.
-ALLOC_CONF = "garbage_collection_threshold:0.8,max_split_size_mb:256"
+# HIP runtime segfaulted in the backward pass (step 810, twice), or the trainer stalled (835). So
+# PyTorch gets 80% of the card (12.8 GiB; the largest step so far needed 12.36 GB), frees cached
+# blocks past 90% of that, and doesn't split big blocks (fragmentation). The threshold alone did
+# nothing: it only works with a cap (train.limit_cuda). Numbers unchanged.
+GPU_FRACTION = 0.8
+ALLOC_CONF = "garbage_collection_threshold:0.9,max_split_size_mb:256"
 CHECKER, ALSO = 4, 3  # into W&B / beside it (the pilots' official scores were version 3)
 TEST_TAG = "test"
 
@@ -279,7 +282,7 @@ class Main(ps.Sweep):
                         step=start_step)  # fmt: skip
             full = (f"cd {ps.WSL_REPO} && source ~/venvs/nfl-ask-trainer/bin/activate && "
                     f"export PYTORCH_ALLOC_CONF={ALLOC_CONF} PYTORCH_HIP_ALLOC_CONF={ALLOC_CONF}"
-                    f" && {cmd}")  # fmt: skip
+                    f" ASKTRAINER_GPU_MEMORY_FRACTION={GPU_FRACTION} && {cmd}")  # fmt: skip
             with log.open("a", encoding="utf-8") as f:
                 proc = subprocess.Popen(["wsl", "-d", "Ubuntu", "--", "bash", "-lc", full],
                                         stdout=f, stderr=subprocess.STDOUT)  # fmt: skip
