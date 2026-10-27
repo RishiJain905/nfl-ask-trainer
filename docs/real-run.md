@@ -149,6 +149,7 @@ which the dashboard reads) and in `state.json`.
 | Adapter | Checker 4 | Checker 3 | CypherBench | gretel | SQaLe | text2cypher | Thought |
 |---|---|---|---|---|---|---|---|
 | step 500 (learning rate still ~9.5e-5) | **38.5%** (70/182) | 39.7% | 34.7% | 61.2% | 40.0% | 12.8% | 200/200, median 1,044 chars |
+| step 1000 (~8.4e-5) | **39.5%** | 39.9% | 38.0% | 62.0% | 38.3% | 13.2% | 200/200, median 837 chars |
 | *P9 final, for reference (240 steps, annealed to 0)* | *41.8%* (76/182) | | *44.0%* | *64.0%* | *38.6%* | *13.2%* | *200/200, 810 chars* |
 | *base model* | | *30.6%* | | | | | |
 
