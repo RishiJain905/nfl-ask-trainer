@@ -202,3 +202,114 @@ def test_the_real_run_watchdog_and_adapter_list(tmp_path):
     cfg.write_text("# x\nname: sft-main\nseed: 42\n", encoding="utf-8")
     assert rr._yaml_name(cfg) == "sft-main"
     assert rr.PAUSE.name == "PAUSE" and rr.PAUSE.parent.name == "finetune"
+
+
+def test_the_real_run_knows_when_to_stop_for_a_scoring():
+    rr = _real()
+    assert rr.adapter_steps(500, 2961) == [500, 1000, 1500, 2000, 2500]
+    assert rr.adapter_steps(500, 2500) == [500, 1000, 1500, 2000]  # the last step is `adapter`
+    assert rr.adapter_steps(0, 2961) == []
+    # step 981 logged: the step-980 checkpoint is behind, so a PAUSE now stops at 1000
+    assert not rr.pause_due(980, 1000, 20) and rr.pause_due(981, 1000, 20)
+    assert rr.pause_due(999, 1000, 20)
+    # an adapter step between checkpoints: the stop comes at the next one (520), after it
+    assert not rr.pause_due(500, 510, 20) and rr.pause_due(501, 510, 20)
+
+
+class _FakeTrainer:
+    """`ask-trainer train --resume` as the driver sees it: a step per poll, an adapter every
+    `adapter` steps (not the last), a checkpoint every `ckpt` that stops on PAUSE."""
+
+    def __init__(self, run: Path, pause: Path, step: int, total=70, ckpt=10, adapter=30):
+        self.run, self.pause, self.step, self.rc = run, pause, step, None
+        self.total, self.ckpt, self.adapter = total, ckpt, adapter
+        (run / "PAUSED").unlink(missing_ok=True)  # the trainer's resume does this
+
+    def poll(self):
+        if self.rc is not None:
+            return self.rc
+        self.step += 1
+        with (self.run / "train_log.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"step": self.step}) + "\n")
+        if self.step % self.adapter == 0 and self.step < self.total:
+            (self.run / f"adapter_step{self.step:06d}").mkdir()
+        if self.step == self.total:
+            (self.run / "adapter").mkdir()
+            (self.run / "DONE").write_text("", encoding="utf-8")
+            self.rc = 0
+        elif self.step % self.ckpt == 0 and self.pause.exists():
+            (self.run / "PAUSED").write_text(f"{self.step}\n", encoding="utf-8")
+            self.rc = 0
+        return self.rc
+
+    def wait(self):
+        return self.rc
+
+
+def _driver(tmp_path, monkeypatch, score):
+    rr = _real()
+    pause = tmp_path / "finetune" / "PAUSE"
+    run = tmp_path / "finetune" / "sft-main"
+    run.mkdir(parents=True)
+    (run / "config.json").write_text(
+        json.dumps({"checkpoint": {"every_steps": 10, "adapter_every_steps": 30}}), encoding="utf-8"
+    )
+    (run / "run_info.json").write_text(json.dumps({"planned_steps": 70}), encoding="utf-8")
+    monkeypatch.setattr(rr, "PAUSE", pause)
+    monkeypatch.setattr(rr.time, "sleep", lambda s: None)
+    stops = []
+
+    def popen(*a, **k):
+        stops.append(rr.last_step(run))
+        return _FakeTrainer(run, pause, stops[-1])
+
+    monkeypatch.setattr(rr.subprocess, "Popen", popen)
+    m = rr.Main.__new__(rr.Main)  # no state on D:
+    m.name, m.dir, m.run_dir, m._plan = "sft-main", tmp_path, run, None
+    m.state = {"run": "sft-main", "resumes": [], "scores": {}, "log": []}
+    m.statuses = []
+    m.status = lambda **kw: m.statuses.append(kw)
+    m.save = lambda: None
+    m.ensure_neo4j = lambda: None
+    m.trainer_running = lambda: False
+    m.score = lambda folder, tag, step, examples, wandb=True: score(m, tag, step, wandb)
+    return rr, m, pause, stops
+
+
+def test_the_real_run_stops_scores_each_adapter_and_resumes(tmp_path, monkeypatch):
+    scored = []
+
+    def score(m, tag, step, wandb):
+        scored.append((tag, step, wandb, rr.last_step(m.run_dir)))
+        return {"wandb": wandb, "checker4": {"val/public/exec_acc": 0.5}}
+
+    rr, m, pause, stops = _driver(tmp_path, monkeypatch, score)
+    assert m.train() == "done"
+    # each adapter scored right at its step (the trainer stopped there), without W&B for now
+    assert scored == [("step000030", 30, False, 30), ("step000060", 60, False, 60)]
+    assert stops == [0, 30, 60]  # launches: the start, then a resume after each scoring
+    assert not pause.exists() and m.state["resumes"] == []  # scoring stops aren't resumes
+    assert rr.last_step(m.run_dir) == 70
+
+
+def test_a_stop_asked_for_during_a_scoring_still_stops(tmp_path, monkeypatch):
+    def score(m, tag, step, wandb):
+        rr.PAUSE.write_text("stop for the night\n", encoding="utf-8")  # Rishi, meanwhile
+        return {"wandb": wandb, "checker4": {}}
+
+    rr, m, pause, stops = _driver(tmp_path, monkeypatch, score)
+    assert m.train() == "paused"
+    assert stops == [0] and pause.read_text(encoding="utf-8").startswith("stop")
+    assert m.statuses[-1]["phase"] == "paused" and "step000030" in m.state["scores"]
+
+
+def test_a_failed_scoring_never_stops_the_training(tmp_path, monkeypatch):
+    def score(m, tag, step, wandb):
+        if tag == "step000030":
+            raise RuntimeError("Neo4j down")
+        return {"wandb": wandb, "checker4": {}}
+
+    rr, m, pause, stops = _driver(tmp_path, monkeypatch, score)
+    assert m.train() == "done"
+    assert [e["tag"] for e in m.state["score_errors"]] == ["step000030"]  # left to the end
+    assert stops == [0, 30, 60] and list(m.state["scores"]) == ["step000060"]

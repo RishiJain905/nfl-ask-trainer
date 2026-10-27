@@ -11,11 +11,19 @@
    checkpoint holds the whole state), writes `<run>/PAUSED` and exits, and the driver exits
    with `phase: paused`. Delete the file and start the driver again to go on (it won't start
    while the file is there);
-3. after `DONE`, scores every saved adapter (`adapter_stepNNNNNN`, the final `adapter`) on the
-   evalset through llama.cpp (the pilots' way: LoRA to GGUF, `serve.ps1` on port 8092,
-   `llamaeval generate`, `ask-trainer evalrun` with checker 4 into the run's W&B run, checker 3
-   beside it), then the test set (1,000 questions, never used for a decision) once, on the final
-   adapter and on the best evalset adapter when that is another one.
+3. scores each step adapter (`adapter_stepNNNNNN`, every 500 steps) on the evalset while the run
+   goes on (Rishi, 2026-10-26: an accuracy that falls while the validation loss still falls
+   should show at that step, not at the end): once the trainer is past the checkpoint before an
+   adapter step, the driver writes `PAUSE` with the text `scoring`, so the trainer stops right
+   after saving that adapter (the same exact stop as above); the driver scores it through
+   llama.cpp (the pilots' way: LoRA to GGUF, `serve.ps1` on port 8092, `llamaeval generate`,
+   `ask-trainer evalrun` with checker 4, checker 3 beside it), removes its `PAUSE` and resumes.
+   A stop asked for meanwhile (any other text in `PAUSE`) still stops it. These scores go into
+   W&B after training: a log into the run's W&B run now would move its step past the trainer's
+   next one, and W&B would drop that step. A scoring that fails is noted and training goes on;
+4. after `DONE`, scores what is left (the final `adapter`, any that failed), logs the mid-run
+   scores into the run's W&B run, then the test set (1,000 questions, never used for a decision)
+   once, on the final adapter and on the best evalset adapter when that is another one.
 
 State: <data root>/ask/main/state.json (scores, resumes) and status.json (what runs now, for the
 watcher); driver.pid. One GPU job at a time.
@@ -29,6 +37,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -43,6 +52,10 @@ from asktrainer import llamaeval  # noqa: E402
 DATA = ps.DATA
 MAIN = DATA / "main"
 PAUSE = DATA / "finetune" / "PAUSE"
+SCORING = "scoring"  # PAUSE's text when the driver itself stops the trainer to score an adapter
+EVALSET = DATA / "training" / "public" / "evalset" / "examples_val.jsonl"
+TESTSET = DATA / "training" / "public" / "testset" / "examples_val.jsonl"
+NEO4J_HTTP = "http://127.0.0.1:7476/"  # asktrainer-neo4j, auth off (docs/traces.md)
 STALL_S = 15 * 60  # no progress while training
 START_S = 90 * 60  # before this launch's first step: tokenizing ~95k examples, loading
 MAX_RESUMES = 6
@@ -94,6 +107,25 @@ def adapter_tags(run_dir: Path) -> list[tuple[str, str, int]]:
     return out
 
 
+def adapter_steps(every: int, total: int) -> list[int]:
+    """The steps the trainer saves an `adapter_stepNNNNNN` at (not the last step: `adapter`)."""
+    return list(range(every, total, every)) if every > 0 else []
+
+
+def pause_due(step: int, adapter_step: int, ckpt_every: int) -> bool:
+    """Past the last checkpoint before `adapter_step`: a PAUSE made now stops the trainer at the
+    first checkpoint at or after it, which comes after that step's adapter is saved."""
+    return step > (adapter_step - 1) // ckpt_every * ckpt_every
+
+
+def neo4j_up() -> bool:
+    try:
+        with urllib.request.urlopen(NEO4J_HTTP, timeout=5) as r:
+            return r.status == 200
+    except OSError:
+        return False
+
+
 class Main(ps.Sweep):
     """The pilot driver's helpers (`wsl`, `serve`, `convert`) with the real run's own state."""
 
@@ -107,6 +139,90 @@ class Main(ps.Sweep):
         self.state = (json.loads(self.state_path.read_text(encoding="utf-8"))
                       if self.state_path.exists()
                       else {"run": self.name, "resumes": [], "scores": {}, "log": []})  # fmt: skip
+        self._plan: tuple[list[int], int] | None = None
+
+    # -- stops for a scoring -----------------------------------------------------------
+    def plan(self) -> tuple[list[int], int]:
+        """(the step adapters' steps, the checkpoint interval), from the run's saved config."""
+        if self._plan is None:
+            ck = json.loads((self.run_dir / "config.json").read_text(encoding="utf-8"))
+            info = json.loads((self.run_dir / "run_info.json").read_text(encoding="utf-8"))
+            ck = ck["checkpoint"]
+            self._plan = (adapter_steps(ck["adapter_every_steps"], info["planned_steps"]),
+                          ck["every_steps"])  # fmt: skip
+        return self._plan
+
+    def failed(self) -> set[str]:
+        return {e["tag"] for e in self.state.get("score_errors", [])}
+
+    def pending(self) -> list[int]:
+        """Step adapters (saved or still to come) not scored yet; one whose scoring failed is
+        left to the scoring after training."""
+        try:
+            steps = self.plan()[0]
+        except (OSError, ValueError, KeyError):  # not written yet, or being written (a start)
+            return []
+        done = set(self.state["scores"]) | self.failed()
+        return [s for s in steps if f"step{s:06d}" not in done]
+
+    def stop_asked(self) -> bool:
+        """`PAUSE` is there and isn't the driver's own (a scoring stop)."""
+        try:
+            return PAUSE.read_text(encoding="utf-8").strip() != SCORING
+        except OSError:
+            return False
+
+    def trainer_running(self) -> bool:
+        # `trai[n]`: the pattern doesn't match the shell that runs pgrep
+        return self.wsl(f"pgrep -f 'ask-trainer trai[n].*{self.name}'").returncode == 0
+
+    def ensure_neo4j(self) -> None:
+        """The Cypher answers are checked on the trainer's Neo4j. Docker Desktop doesn't start by
+        itself after a switch-off: start it when it's down, then the container, and wait for
+        Neo4j to answer."""
+        up = ["docker", "version", "--format", "{{.Server.Version}}"]
+
+        def engine() -> bool:  # (it can hang while Docker Desktop starts: bounded)
+            try:
+                r = subprocess.run(up, capture_output=True, timeout=60, **ps.TEXT)
+                return r.returncode == 0
+            except subprocess.TimeoutExpired:
+                return False
+
+        if not engine():
+            subprocess.run(["docker", "desktop", "start"], capture_output=True, timeout=600,
+                           **ps.TEXT)  # fmt: skip
+            deadline = time.time() + 600
+            while not engine():  # (the start can return before the engine answers)
+                if time.time() > deadline:
+                    raise RuntimeError("Docker Desktop didn't come up within 10 minutes")
+                time.sleep(10)
+        subprocess.run(["docker", "start", "asktrainer-neo4j"], capture_output=True, **ps.TEXT)
+        deadline = time.time() + 300
+        while not neo4j_up():
+            if time.time() > deadline:
+                raise RuntimeError(f"Neo4j didn't answer on {NEO4J_HTTP} within 5 minutes")
+            time.sleep(5)
+
+    def score_pending(self) -> None:
+        """Each saved step adapter not scored yet, on the evalset, while the trainer is stopped
+        (no W&B yet: the module's docstring says why). A failure is noted and training goes on;
+        the scoring after training tries it again."""
+        for folder, tag, step in adapter_tags(self.run_dir):
+            if tag == "final" or tag in self.state["scores"] or tag in self.failed():
+                continue
+            if self.trainer_running():  # never two GPU jobs: leave it to the next stop
+                return
+            self.status(phase="scoring", note=f"evalset: {tag} (during the run)",
+                        step=last_step(self.run_dir))  # fmt: skip
+            try:
+                self.ensure_neo4j()
+                self.state["scores"][tag] = self.score(folder, tag, step, EVALSET, wandb=False)
+            except Exception as e:  # a scoring never stops the training
+                self.state.setdefault("score_errors", []).append(
+                    {"ts": now(), "tag": tag, "error": f"{type(e).__name__}: {str(e)[:400]}"}
+                )
+            self.save()
 
     # -- training under the watchdog ------------------------------------------------------
     def kill_trainer(self) -> None:
@@ -117,10 +233,13 @@ class Main(ps.Sweep):
         """'done' | 'paused' | raises when the run can't go on."""
         log = self.dir / f"{self.name}.train.log"
         while not (self.run_dir / "DONE").exists():
-            if PAUSE.exists():  # a stop was asked for: nothing starts until the file is gone
+            if not self.stop_asked():
+                self.score_pending()  # step adapters saved and not scored yet
+            if self.stop_asked():  # a stop was asked for: nothing starts until the file is gone
                 note = f"{PAUSE} exists: delete it and start the driver again"
                 self.status(phase="paused", step=last_step(self.run_dir), note=note)
                 return "paused"
+            PAUSE.unlink(missing_ok=True)  # the driver's own, done with
             resume = (self.run_dir / "config.json").exists()
             if resume and len(self.state["resumes"]) >= MAX_RESUMES:
                 raise RuntimeError(f"{MAX_RESUMES} resumes already: see {log}")
@@ -137,15 +256,25 @@ class Main(ps.Sweep):
             why = None
             while proc.poll() is None:
                 time.sleep(30)
-                armed = last_step(self.run_dir) > start_step
-                if stalled(time.time(), launched, progress_mtime(self.run_dir), armed):
+                step = last_step(self.run_dir)
+                if stalled(time.time(), launched, progress_mtime(self.run_dir), step > start_step):
                     why = "stalled"
                     self.kill_trainer()
                     break
+                todo = self.pending()
+                if todo and not PAUSE.exists() and pause_due(step, todo[0], self.plan()[1]):
+                    PAUSE.write_text(f"{SCORING}\n", encoding="utf-8")
+                    self.status(
+                        phase="training",
+                        step=step,
+                        note=f"stopping at the next checkpoint to score step {todo[0]}",
+                    )
             proc.wait()
             step = last_step(self.run_dir)
             if (self.run_dir / "DONE").exists():
                 break
+            if (self.run_dir / "PAUSED").exists() and not self.stop_asked():
+                continue  # stopped to score an adapter: the loop's top scores it and resumes
             if (self.run_dir / "PAUSED").exists():  # the trainer stopped at a checkpoint
                 at = (self.run_dir / "PAUSED").read_text(encoding="utf-8").strip()
                 note = (f"stopped cleanly after the checkpoint at step {at}: safe to switch "
@@ -163,7 +292,17 @@ class Main(ps.Sweep):
         return "done"
 
     # -- scoring -----------------------------------------------------------------------
-    def score(self, folder: str, tag: str, step: int, examples: Path) -> dict:
+    def check(self, preds: Path, tag: str, step: int, examples: Path, checker: int,
+              wandb: bool) -> dict:  # fmt: skip
+        extra = "" if wandb else " --no-wandb"
+        r = self.wsl(f"ask-trainer evalrun --run {self.name} --preds {ps._wsl(preds)} "
+                     f"--tag {tag} --step {step} --checker {checker} "
+                     f"--examples {ps._wsl(examples)}{extra}")  # fmt: skip
+        if r.returncode != 0:
+            raise RuntimeError(f"scoring {tag} (checker {checker}) failed: {r.stderr[-600:]}")
+        return json.loads(r.stdout.strip().splitlines()[-1])
+
+    def score(self, folder: str, tag: str, step: int, examples: Path, wandb: bool = True) -> dict:
         gguf = self.convert(self.name, folder)
         preds = self.run_dir / f"preds_llamacpp_{tag}.jsonl"
         self.serve(ps.EVAL_PORT, f"--reasoning-budget {ps.BUDGET} --lora {gguf}")
@@ -171,27 +310,25 @@ class Main(ps.Sweep):
             gen = llamaeval.generate(examples, preds, f"http://127.0.0.1:{ps.EVAL_PORT}")
         finally:
             self.serve(ps.EVAL_PORT, stop=True)
-        out = {"generate": gen}
-        ex = f"--examples {ps._wsl(examples)}"
-        runs = ((CHECKER, "", tag), (ALSO, " --no-wandb", f"{tag}-checker{ALSO}"))
-        for checker, extra, t in runs:
-            r = self.wsl(f"ask-trainer evalrun --run {self.name} --preds {ps._wsl(preds)} "
-                         f"--tag {t} --step {step} --checker {checker} {ex}{extra}")  # fmt: skip
-            if r.returncode != 0:
-                raise RuntimeError(f"scoring {tag} (checker {checker}) failed: {r.stderr[-600:]}")
-            out[f"checker{checker}"] = json.loads(r.stdout.strip().splitlines()[-1])
-        return out
+        return {"generate": gen, "wandb": wandb,
+                f"checker{CHECKER}": self.check(preds, tag, step, examples, CHECKER, wandb),
+                f"checker{ALSO}": self.check(preds, f"{tag}-checker{ALSO}", step, examples, ALSO,
+                                             wandb=False)}  # fmt: skip
 
     def score_all(self) -> None:
-        evalset = DATA / "training" / "public" / "evalset" / "examples_val.jsonl"
-        testset = DATA / "training" / "public" / "testset" / "examples_val.jsonl"
         scores = self.state["scores"]
-        # the Cypher answers are checked on the trainer's Neo4j (a no-op when it runs already)
-        subprocess.run(["docker", "start", "asktrainer-neo4j"], capture_output=True, **ps.TEXT)
+        self.ensure_neo4j()
         for folder, tag, step in adapter_tags(self.run_dir):
             if tag not in scores:
                 self.status(phase="scoring", note=f"evalset: {tag}")
-                scores[tag] = self.score(folder, tag, step, evalset)
+                scores[tag] = self.score(folder, tag, step, EVALSET)
+                self.save()
+            elif not scores[tag].get("wandb", True):  # scored during the run: into W&B now
+                self.status(phase="scoring", note=f"evalset: {tag} into W&B")
+                preds = self.run_dir / f"preds_llamacpp_{tag}.jsonl"
+                scores[tag][f"checker{CHECKER}"] = self.check(preds, tag, step, EVALSET, CHECKER,
+                                                              wandb=True)  # fmt: skip
+                scores[tag]["wandb"] = True
                 self.save()
         acc = {t: s[f"checker{CHECKER}"].get("val/public/exec_acc") or 0.0
                for t, s in scores.items() if not t.startswith(TEST_TAG)}  # fmt: skip
@@ -202,7 +339,7 @@ class Main(ps.Sweep):
                 folder = next(f for f, tg, _ in adapter_tags(self.run_dir) if tg == tag)
                 step = next(s for _, tg, s in adapter_tags(self.run_dir) if tg == tag)
                 self.status(phase="testing", note=f"testset: {tag}")
-                scores[t] = self.score(folder, t, step, testset)
+                scores[t] = self.score(folder, t, step, TESTSET)
                 self.save()
         self.state["best_on_evalset"] = best
 
