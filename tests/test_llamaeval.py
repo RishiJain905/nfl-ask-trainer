@@ -9,6 +9,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import pytest
+
 from asktrainer import llamaeval
 
 REPO = Path(__file__).resolve().parents[1]
@@ -218,10 +220,13 @@ def test_the_real_run_knows_when_to_stop_for_a_scoring():
 
 class _FakeTrainer:
     """`ask-trainer train --resume` as the driver sees it: a step per poll, an adapter every
-    `adapter` steps (not the last), a checkpoint every `ckpt` that stops on PAUSE."""
+    `adapter` steps (not the last), a checkpoint every `ckpt` that stops on PAUSE; it starts
+    from the last checkpoint and crashes (exit 139) at each step in `crashes`, once."""
 
-    def __init__(self, run: Path, pause: Path, step: int, total=70, ckpt=10, adapter=30):
-        self.run, self.pause, self.step, self.rc = run, pause, step, None
+    def __init__(self, run: Path, pause: Path, step: int, crashes: list, total=70, ckpt=10,
+                 adapter=30):  # fmt: skip
+        self.run, self.pause, self.rc, self.crashes = run, pause, None, crashes
+        self.step = step // ckpt * ckpt
         self.total, self.ckpt, self.adapter = total, ckpt, adapter
         (run / "PAUSED").unlink(missing_ok=True)  # the trainer's resume does this
 
@@ -231,8 +236,12 @@ class _FakeTrainer:
         self.step += 1
         with (self.run / "train_log.jsonl").open("a", encoding="utf-8") as f:
             f.write(json.dumps({"step": self.step}) + "\n")
+        if self.crashes and self.step == self.crashes[0]:
+            self.crashes.pop(0)
+            self.rc = 139
+            return self.rc
         if self.step % self.adapter == 0 and self.step < self.total:
-            (self.run / f"adapter_step{self.step:06d}").mkdir()
+            (self.run / f"adapter_step{self.step:06d}").mkdir(exist_ok=True)
         if self.step == self.total:
             (self.run / "adapter").mkdir()
             (self.run / "DONE").write_text("", encoding="utf-8")
@@ -245,9 +254,14 @@ class _FakeTrainer:
     def wait(self):
         return self.rc
 
+    @property
+    def returncode(self):
+        return self.rc
 
-def _driver(tmp_path, monkeypatch, score):
+
+def _driver(tmp_path, monkeypatch, score, crashes=()):
     rr = _real()
+    crashes = list(crashes)
     pause = tmp_path / "finetune" / "PAUSE"
     run = tmp_path / "finetune" / "sft-main"
     run.mkdir(parents=True)
@@ -261,7 +275,7 @@ def _driver(tmp_path, monkeypatch, score):
 
     def popen(*a, **k):
         stops.append(rr.last_step(run))
-        return _FakeTrainer(run, pause, stops[-1])
+        return _FakeTrainer(run, pause, stops[-1], crashes)
 
     monkeypatch.setattr(rr.subprocess, "Popen", popen)
     m = rr.Main.__new__(rr.Main)  # no state on D:
@@ -313,3 +327,36 @@ def test_a_failed_scoring_never_stops_the_training(tmp_path, monkeypatch):
     assert m.train() == "done"
     assert [e["tag"] for e in m.state["score_errors"]] == ["step000030"]  # left to the end
     assert stops == [0, 30, 60] and list(m.state["scores"]) == ["step000060"]
+
+
+def test_the_resume_limit_counts_crashes_from_the_same_checkpoint():
+    rr = _real()
+
+    def r(*steps):
+        return [{"step": s} for s in steps]
+
+    assert rr.resumes_in_a_row([], 20) == 0
+    assert rr.resumes_in_a_row(r(809), 20) == 1
+    assert rr.resumes_in_a_row(r(809, 815), 20) == 2  # both back to the step-800 checkpoint
+    assert rr.resumes_in_a_row(r(809, 815, 1503), 20) == 1  # it got further in between
+    assert rr.resumes_in_a_row(r(173, 809, 812, 819), 20) == 3
+
+
+def _scored(m, tag, step, wandb):
+    return {"wandb": wandb, "checker4": {}}
+
+
+def test_crashes_now_and_then_are_resumed_and_the_run_finishes(tmp_path, monkeypatch):
+    rr, m, pause, stops = _driver(tmp_path, monkeypatch, _scored, crashes=[15, 45])
+    assert m.train() == "done"
+    assert [r["step"] for r in m.state["resumes"]] == [15, 45]
+    assert stops == [0, 15, 30, 45, 60]  # each crash resumed from its checkpoint (10, 40)
+    assert list(m.state["scores"]) == ["step000030", "step000060"]
+
+
+def test_a_crash_loop_stops_the_driver(tmp_path, monkeypatch):
+    # three crashes before the run gets past the step-10 checkpoint, each a little further on
+    rr, m, pause, stops = _driver(tmp_path, monkeypatch, _scored, crashes=[15, 17, 19])
+    with pytest.raises(RuntimeError, match="3 crashes in a row"):
+        m.train()
+    assert [r["step"] for r in m.state["resumes"]] == [15, 17, 19]

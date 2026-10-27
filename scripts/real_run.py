@@ -5,7 +5,9 @@
 1. trains (`ask-trainer train`, WSL; `--resume` when the run folder is there unfinished) under a
    watchdog: no new line in the run's `train_log.jsonl` / `events.jsonl` for 15 minutes while
    the trainer lives (pilot P9 stalled at step 173 with the GPU idle) stops it and resumes from
-   the last checkpoint, up to 6 times, and only while each resume makes progress;
+   the last checkpoint, and so does a crash (a segfault in the GPU runtime at step 809), as long
+   as each resume makes progress and the crashes don't keep coming back before the next
+   checkpoint;
 2. stops on request, so the PC can be switched off: with `D:\\nfl-ml-data\\ask\\finetune\\PAUSE`
    present, the trainer itself stops right after its next checkpoint (nothing lost: the
    checkpoint holds the whole state), writes `<run>/PAUSED` and exits, and the driver exits
@@ -58,7 +60,12 @@ TESTSET = DATA / "training" / "public" / "testset" / "examples_val.jsonl"
 NEO4J_HTTP = "http://127.0.0.1:7476/"  # asktrainer-neo4j, auth off (docs/traces.md)
 STALL_S = 15 * 60  # no progress while training
 START_S = 90 * 60  # before this launch's first step: tokenizing ~95k examples, loading
-MAX_RESUMES = 6
+# WSL's GPU residency failures (`dxgkio_make_resident ... -12`) crash or stall the trainer now
+# and then all through a run (sft-main: a segfault at step 809), and a resume goes on cleanly. So
+# the limit is on crashes that come back before the run gets past the next checkpoint (a crash
+# loop), with a high cap on the whole run as a backstop.
+MAX_RESUMES_IN_A_ROW = 3
+MAX_RESUMES = 30
 CHECKER, ALSO = 4, 3  # into W&B / beside it (the pilots' official scores were version 3)
 TEST_TAG = "test"
 
@@ -105,6 +112,18 @@ def adapter_tags(run_dir: Path) -> list[tuple[str, str, int]]:
     if (run_dir / "adapter").is_dir():
         out.append(("adapter", "final", last_step(run_dir)))
     return out
+
+
+def resumes_in_a_row(resumes: list[dict], ckpt_every: int) -> int:
+    """The latest resumes that all restarted from the same checkpoint: the run got no further
+    than that checkpoint between them."""
+    n, at = 0, None
+    for r in reversed(resumes):
+        c = r["step"] // ckpt_every
+        if at is not None and c != at:
+            break
+        at, n = c, n + 1
+    return n
 
 
 def adapter_steps(every: int, total: int) -> list[int]:
@@ -243,6 +262,10 @@ class Main(ps.Sweep):
             resume = (self.run_dir / "config.json").exists()
             if resume and len(self.state["resumes"]) >= MAX_RESUMES:
                 raise RuntimeError(f"{MAX_RESUMES} resumes already: see {log}")
+            if resume and self.state["resumes"] and resumes_in_a_row(
+                    self.state["resumes"], self.plan()[1]) >= MAX_RESUMES_IN_A_ROW:  # fmt: skip
+                raise RuntimeError(f"{MAX_RESUMES_IN_A_ROW} crashes in a row from the same "
+                                   f"checkpoint: see {log}")  # fmt: skip
             cmd = (f"ask-trainer train --resume {self.name} --launched-by agent" if resume else
                    f"ask-trainer train --config {ps._wsl(self.cfg_path)} --name {self.name} "
                    "--launched-by agent")  # fmt: skip

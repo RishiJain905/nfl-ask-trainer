@@ -71,9 +71,18 @@ Pilot P9 stopped making steps once (step 173: the GPU idle, the trainer spinning
   was the cache growing over a long run);
 - the driver watches `train_log.jsonl` and `events.jsonl`: no new line for **15 minutes** (once
   the first step of a launch is logged; 90 minutes before that, for loading and tokenizing
-  ~95k examples) stops the trainer and resumes it from its last checkpoint. At most 6 resumes in
-  the whole run, and a resume that makes no step at all stops the driver (`phase: failed`) instead
-  of looping. Every resume is listed in `state.json`.
+  ~95k examples) stops the trainer and resumes it from its last checkpoint. A crash is resumed the
+  same way. A resume that makes no step at all, or 3 crashes in a row that all go back to the
+  same checkpoint (a crash loop), stop the driver (`phase: failed`) instead of looping; 30
+  resumes in the whole run is the backstop. Every resume is listed in `state.json`.
+- **The crashes seen**: at step 809 (2026-10-27 01:39 UTC) the trainer died with a segfault in the
+  GPU runtime (`libamdhip64`, exit 139) right after two of WSL's `dxgkio_make_resident ... -12`
+  failures (Windows couldn't keep the GPU memory resident); the driver resumed it from step 800
+  and the run went on (the 9 steps redone give the same numbers, so W&B's warning about steps
+  801-809 being logged again drops copies it already has). The kernel log had nine such failures
+  in the 2.5 hours before, most of them harmless. The first limit (6 resumes in the whole run)
+  could have stopped a healthy run over ~20 hours at that rate, hence the rule above (Rishi was
+  told, 2026-10-27).
 
 ## What gets saved
 
