@@ -131,7 +131,7 @@ td .u { color: var(--muted); font-size: 0.74rem; display: block; }
     <div class="grid">
       <div class="card"><div class="chart-head"><h2>Training loss on answer tokens</h2><div class="legend" id="lg-ce"></div></div><div class="chart" id="c-ce"></div><div class="note">Smoothed = exponential moving average of the logged loss (weight 0.1), computed on this page.</div></div>
       <div class="card"><div class="chart-head"><h2>Validation loss by dataset</h2><div class="legend" id="lg-vl"></div></div><div class="chart" id="c-vl"></div></div>
-      <div class="card"><div class="chart-head"><h2>Validation accuracy</h2><div class="legend" id="lg-va"></div></div><div class="chart" id="c-va"></div><div class="note">Executed: the generated query returns exactly the reference rows. Exact: the query text matches after spacing is normalised.</div></div>
+      <div class="card"><div class="chart-head"><h2>Validation accuracy</h2><div class="legend" id="lg-va"></div></div><div class="chart" id="c-va"></div><div class="note">The share of the 200 held-out evalset questions whose generated query returns exactly the reference rows (checker 4), overall and per dataset. Scored through llama.cpp at each adapter snapshot (every 500 steps; the training stops ~15 minutes for it), and the final adapter after training. Dashed: the base model and pilot P9's final adapter on the same questions and checker.</div></div>
       <div class="card"><div class="chart-head"><h2>Learning rate</h2></div><div class="chart" id="c-lr"></div></div>
       <div class="card"><div class="chart-head"><h2>Gradient norm before clipping</h2></div><div class="chart" id="c-gn"></div><div class="note">The dashed line is the clip at 1.0.</div></div>
       <div class="card"><div class="chart-head"><h2>Training speed</h2></div><div class="chart" id="c-tps"></div><div class="note">Tokens per second, per optimizer step, as the trainer measured it.</div></div>
@@ -247,10 +247,13 @@ td .u { color: var(--muted); font-size: 0.74rem; display: block; }
     var xs = [], ys = [];
     series.forEach(function (s) { s.data.forEach(function (p) { xs.push(p[0]); ys.push(p[1]); }); });
     var x0 = Math.min.apply(null, xs), x1 = Math.max.apply(null, xs);
+    if (opts.xMin != null) x0 = Math.min(x0, opts.xMin);
+    if (opts.xMax != null) x1 = Math.max(x1, opts.xMax);
     if (x0 === x1) { x1 = x0 + 1; }
     var y0 = opts.yMin != null ? opts.yMin : Math.min.apply(null, ys);
     var y1 = opts.yMax != null ? opts.yMax : Math.max.apply(null, ys);
     if (opts.ref != null) { y0 = Math.min(y0, opts.ref); y1 = Math.max(y1, opts.ref); }
+    (opts.refs || []).forEach(function (r) { y0 = Math.min(y0, r.v); y1 = Math.max(y1, r.v); });
     if (y0 === y1) { y1 = y0 + (Math.abs(y0) || 1) * 0.1; y0 = y0 - (Math.abs(y0) || 1) * 0.1; }
     var yt = niceTicks(y0, y1, 4);
     y0 = Math.min(y0, yt.ticks[0]); y1 = Math.max(y1, yt.ticks[yt.ticks.length - 1]);
@@ -269,6 +272,10 @@ td .u { color: var(--muted); font-size: 0.74rem; display: block; }
       tx.textContent = opts.xTime ? new Date(t).toISOString().slice(11, 16) : fmtNum(t, 0); svg.appendChild(tx);
     });
     if (opts.ref != null) svg.appendChild(sv("line", { x1: L, x2: W - R, y1: Y(opts.ref), y2: Y(opts.ref), stroke: css("--muted"), "stroke-width": 1, "stroke-dasharray": "4 4" }));
+    (opts.refs || []).forEach(function (r) {  // labelled reference levels (e.g. earlier models' scores)
+      svg.appendChild(sv("line", { x1: L, x2: W - R, y1: Y(r.v), y2: Y(r.v), stroke: css("--muted"), "stroke-width": 1, "stroke-dasharray": "4 4" }));
+      var rt = sv("text", { x: W - R - 4, y: Y(r.v) - 4, "text-anchor": "end" }); rt.textContent = r.label; svg.appendChild(rt);
+    });
     series.forEach(function (s) {
       var d = s.data.map(function (p, i) { return (i ? "L" : "M") + X(p[0]).toFixed(1) + " " + Y(p[1]).toFixed(1); }).join(" ");
       svg.appendChild(sv("path", { d: d, fill: "none", stroke: css(s.color), "stroke-width": s.width || 2, "stroke-linejoin": "round", "stroke-linecap": "round", opacity: s.opacity || 1 }));
@@ -588,7 +595,9 @@ td .u { color: var(--muted); font-size: 0.74rem; display: block; }
     prog.firstElementChild.style.width = (frac * 100).toFixed(1) + "%"; prog.setAttribute("aria-valuenow", Math.round(frac * 100));
     document.getElementById("progtext").textContent = "Step " + (st.step || 0) + (planned ? " of " + planned : "") + (st.tokens_seen ? " · " + fmtNum(st.tokens_seen) + " tokens" + (st.planned_tokens ? " of " + fmtNum(st.planned_tokens) : "") : "");
     document.getElementById("eta").textContent = st.state === "done" ? "Finished" : st.eta_s != null ? "About " + dur(st.eta_s) + " left (estimate from recent step times)" : "";
-    var lastEval = m.ev.length ? m.ev[m.ev.length - 1] : null, lm = lastEval ? lastEval.metrics : {};
+    var accOf = function (e) { var v = e.metrics["val/public/exec_acc"]; return v != null ? v : e.metrics["val/exec_acc"]; };
+    var withLoss = m.ev.filter(function (e) { return e.metrics["val/loss"] != null; }), lastLoss = withLoss[withLoss.length - 1];
+    var withAcc = m.ev.filter(function (e) { return accOf(e) != null; }), lastAcc = withAcc[withAcc.length - 1];
     var ce = ser(m.pts, "ce"), smooth = ema(ce, 0.1);
     var tiles = [
       ["Training loss", smooth.length ? fmtNum(smooth[smooth.length - 1][1]) : "—", "smoothed; last logged " + fmtNum(st.ce_last)],
@@ -596,7 +605,8 @@ td .u { color: var(--muted); font-size: 0.74rem; display: block; }
       ["Speed", st.tok_s_recent != null ? fmtNum(st.tok_s_recent, 0) + " tok/s" : "—", "median of the last 10 steps"],
       ["Peak GPU memory", st.peak_gb != null ? st.peak_gb.toFixed(1) + " GB" : "—", "of 16 GB"],
       ["Last checkpoint", st.last_checkpoint ? "step " + st.last_checkpoint.step : "—", st.last_checkpoint ? ago(st.last_checkpoint.ts) : "none yet"],
-      ["Last evaluation", lastEval ? (lm["val/public/exec_acc"] != null ? pct(lm["val/public/exec_acc"]) : lm["val/exec_acc"] != null ? pct(lm["val/exec_acc"]) : fmtNum(lm["val/loss"])) : "—", lastEval ? "step " + lastEval.step + (lm["val/public/exec_acc"] != null || lm["val/exec_acc"] != null ? " · executed correctly" : " · val loss") : "none yet"]
+      ["Val loss", lastLoss ? fmtNum(lastLoss.metrics["val/loss"]) : "—", lastLoss ? "step " + lastLoss.step + " · thinking on " + fmtNum(lastLoss.metrics["val/loss/thinking_on"]) : "none yet"],
+      ["Val accuracy", lastAcc ? pct(accOf(lastAcc)) : "—", lastAcc ? "step " + lastAcc.step + " · held-out set" : "first at step 500"]
     ];
     var tb = document.getElementById("tiles"); tb.textContent = "";
     tiles.forEach(function (t) { var d = el("div", { "class": "tile" }); d.appendChild(el("span", { "class": "k" }, t[0])); d.appendChild(el("span", { "class": "v" }, t[1])); d.appendChild(el("span", { "class": "s" }, t[2])); tb.appendChild(d); });
@@ -608,10 +618,14 @@ td .u { color: var(--muted); font-size: 0.74rem; display: block; }
     lineChart(document.getElementById("c-vl"), document.getElementById("lg-vl"), { label: "Validation loss by dataset", series: vl, empty: "No evaluations yet" });
     var acc = [];
     var overall = m.ev.filter(function (e) { return e.metrics["val/public/exec_acc"] != null || e.metrics["val/exec_acc"] != null; }).map(function (e) { var v = e.metrics["val/public/exec_acc"]; return [e.step, v != null ? v : e.metrics["val/exec_acc"]]; });
-    if (overall.length) acc.push({ name: "executed, all", color: "--s6", data: overall });
-    setsIn(m.ev, "exec_acc").forEach(function (sname, i) { acc.push({ name: sname + " executed", color: SERIES[i % 5], data: m.ev.filter(function (e) { return e.metrics["val/" + sname + "/exec_acc"] != null || e.metrics["val/public/" + sname + "/exec_acc"] != null; }).map(function (e) { var v = e.metrics["val/" + sname + "/exec_acc"]; return [e.step, v != null ? v : e.metrics["val/public/" + sname + "/exec_acc"]]; }) }); });
-    setsIn(m.ev, "exact").forEach(function (sname, i) { acc.push({ name: sname + " exact", color: SERIES[(i + 2) % 5], data: m.ev.filter(function (e) { return e.metrics["val/" + sname + "/exact"] != null; }).map(function (e) { return [e.step, e.metrics["val/" + sname + "/exact"]]; }) }); });
-    lineChart(document.getElementById("c-va"), document.getElementById("lg-va"), { label: "Validation accuracy", series: acc, yMin: 0, yMax: 1, yFmt: function (v) { return (v * 100).toFixed(0) + "%"; }, empty: "No evaluations yet" });
+    // "public" is the overall score again (val/public/exec_acc): it is "all", drawn last (on top)
+    setsIn(m.ev, "exec_acc").filter(function (sname) { return sname !== "public"; }).forEach(function (sname, i) { acc.push({ name: sname, color: SERIES[i % 5], data: m.ev.filter(function (e) { return e.metrics["val/" + sname + "/exec_acc"] != null || e.metrics["val/public/" + sname + "/exec_acc"] != null; }).map(function (e) { var v = e.metrics["val/" + sname + "/exec_acc"]; return [e.step, v != null ? v : e.metrics["val/public/" + sname + "/exec_acc"]]; }) }); });
+    if (overall.length) acc.push({ name: "all", color: "--s6", data: overall, width: 3 });
+    // the x axis spans the whole run, so each adapter snapshot sits at its step; dashed: earlier
+    // models under the same checker (4) on the same 200 questions
+    lineChart(document.getElementById("c-va"), document.getElementById("lg-va"), { label: "Validation accuracy", series: acc, yMin: 0, yMax: 1, yFmt: function (v) { return (v * 100).toFixed(0) + "%"; },
+      xMin: 0, xMax: st.planned_steps ? Math.ceil(st.planned_steps / 500) * 500 : null,
+      refs: [{ v: 0.4176, label: "P9 final 41.8%" }, { v: 0.3022, label: "base model 30.2%" }], empty: "No accuracy yet: the first is scored at step 500" });
     lineChart(document.getElementById("c-lr"), null, { label: "Learning rate per step", series: [{ name: "learning rate", color: "--s1", data: ser(m.pts, "lr") }], yMin: 0, yFmt: function (v) { return v === 0 ? "0" : v.toExponential(1); } });
     lineChart(document.getElementById("c-gn"), null, { label: "Gradient norm per step", series: [{ name: "gradient norm", color: "--s1", data: ser(m.pts, "grad_norm") }], yMin: 0, ref: 1 });
     lineChart(document.getElementById("c-tps"), null, { label: "Tokens per second per step", series: [{ name: "tokens/s", color: "--s1", data: ser(m.pts, "tok_s") }], yMin: 0 });
