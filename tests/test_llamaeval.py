@@ -365,3 +365,30 @@ def test_a_crash_loop_stops_the_driver(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="3 crashes in a row"):
         m.train()
     assert [r["step"] for r in m.state["resumes"]] == [15, 17, 19]
+
+
+@pytest.mark.parametrize("final_acc", [0.47, 0.40])
+def test_the_test_set_scores_the_final_and_the_best_mid_run_snapshot(tmp_path, monkeypatch,
+                                                                     final_acc):  # fmt: skip
+    # whichever is best on the evalset, both candidates get the test set
+    acc = {"step000030": 0.45, "step000060": 0.42, "final": final_acc}
+
+    def score(m, tag, step, wandb):
+        return {"wandb": wandb, "checker4": {"val/public/exec_acc": acc.get(tag, 0.0)}}
+
+    rr, m, pause, stops = _driver(tmp_path, monkeypatch, score)
+    assert m.train() == "done"
+    scored = []
+    m.score = lambda folder, tag, step, examples, wandb=True: (
+        scored.append((folder, tag, step, examples == rr.TESTSET)) or score(m, tag, step, wandb)
+    )
+    m.check = lambda preds, tag, step, examples, checker, wandb=True: {
+        "val/public/exec_acc": acc[tag]
+    }
+    m.score_all()
+    assert scored == [("adapter", "final", 70, False),
+                      ("adapter", "test-final", 70, True),
+                      ("adapter_step000030", "test-step000030", 30, True)]  # fmt: skip
+    assert m.state["best_mid_run"] == "step000030"
+    assert m.state["best_on_evalset"] == ("final" if final_acc > 0.45 else "step000030")
+    assert all(m.state["scores"][t]["wandb"] for t in ("step000030", "step000060"))

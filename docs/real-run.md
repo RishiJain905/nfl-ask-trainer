@@ -32,8 +32,8 @@ C:\Python314\python.exe scripts\real_run.py
 
 One process does everything (`scripts/real_run.py`): it trains (`ask-trainer train` in WSL,
 `--resume` when the run folder is already there), stops at every adapter snapshot to score it on
-the evalset and goes on, then scores the final adapter, and the final one (plus the best, if
-another) on the test set. Docker Desktop and the trainer's Neo4j (`asktrainer-neo4j`, for checking
+the evalset and goes on, then scores the final adapter, and the final one and the best mid-run
+snapshot on the test set. Docker Desktop and the trainer's Neo4j (`asktrainer-neo4j`, for checking
 the Cypher answers) are started when a scoring needs them. Started again after any stop, it
 carries on where things stand (an adapter saved but not scored yet is scored first). State: `D:\nfl-ml-data\ask\main\` (`status.json`, `state.json`
 with the scores and every resume, `sft-main.train.log`, `driver.pid`). The run itself:
@@ -163,10 +163,22 @@ snapshots is the signal: a fall from one snapshot to the next while the validati
 falls is what the stops are there to catch. The thought is intact (every answer has one, longer
 than P9's).
 
+Question by question (2026-10-28, from the saved answers): from step 1500 to 2500, 7 questions
+became right and 11 wrong of the 179 scored at both (p ≈ 0.5, an exact sign test on the changes);
+from 2000 to 2500, 11 and 10; even the rise from 1000 to 1500 (18 and 9) is p ≈ 0.12. Of the 169
+questions scored at every snapshot, 44 are always right, 66 never and 59 change at least once, so
+a snapshot's score moves by a few points on the borderline ones. The dip after step 1500 is not a
+trend the evalset can tell from noise, and the validation loss never rose (flat at 0.3118 at
+steps 2600 and 2700): no sign of overfitting.
+
 After training: the final adapter, the mid-run scores into the run's W&B run (`llamacpp/step`
 axis, a re-check of the saved answers, no new generation), then the test set (1,000 questions,
-~25 minutes) once on the final adapter, and on the best evalset adapter if that is another one. The
-test set is never used to choose anything.
+~25 minutes each) on the final adapter and on the best mid-run snapshot (step 1500), always both,
+even if the final is the best on the evalset (`state.json`: `best_on_evalset`, `best_mid_run`).
+**The test set picks between those two** (Rishi's call, 2026-10-28): the one it picks is the SFT
+adapter that is merged into the base and pushed to Hugging Face. Picking the better of two on the
+test set flatters the winner's score by under a point (its noise is ~1.5 points); nothing else
+is chosen on it.
 
 ## The dashboard
 

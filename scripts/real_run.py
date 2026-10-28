@@ -24,8 +24,9 @@
    W&B after training: a log into the run's W&B run now would move its step past the trainer's
    next one, and W&B would drop that step. A scoring that fails is noted and training goes on;
 4. after `DONE`, scores what is left (the final `adapter`, any that failed), logs the mid-run
-   scores into the run's W&B run, then the test set (1,000 questions, never used for a decision)
-   once, on the final adapter and on the best evalset adapter when that is another one.
+   scores into the run's W&B run, then the test set (1,000 questions) on the final adapter and
+   on the best mid-run snapshot, always both: the test set picks between those two (Rishi,
+   2026-10-28), and nothing else.
 
 State: <data root>/ask/main/state.json (scores, resumes) and status.json (what runs now, for the
 watcher); driver.pid. One GPU job at a time.
@@ -366,7 +367,10 @@ class Main(ps.Sweep):
         acc = {t: s[f"checker{CHECKER}"].get("val/public/exec_acc") or 0.0
                for t, s in scores.items() if not t.startswith(TEST_TAG)}  # fmt: skip
         best = max(acc, key=acc.get)
-        for tag in dict.fromkeys(["final", best]):
+        # the final and the best mid-run snapshot, even when the final is the best: the test set
+        # decides between the two (Rishi's call, 2026-10-28)
+        mid = max((t for t in acc if t != "final"), key=acc.get, default="final")
+        for tag in dict.fromkeys(["final", mid]):
             t = f"{TEST_TAG}-{tag}"
             if t not in scores:
                 folder = next(f for f, tg, _ in adapter_tags(self.run_dir) if tg == tag)
@@ -375,6 +379,7 @@ class Main(ps.Sweep):
                 scores[t] = self.score(folder, t, step, TESTSET)
                 self.save()
         self.state["best_on_evalset"] = best
+        self.state["best_mid_run"] = mid
 
     def run(self) -> int:
         if self.train() == "paused":
