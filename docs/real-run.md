@@ -144,7 +144,7 @@ run while it is stopped moves that run's step past the trainer's next one, and W
 that step's training metrics. Until then they are in the run folder (`scores_llamacpp_<tag>.json`,
 which the dashboard reads) and in `state.json`.
 
-### Evalset accuracy so far
+### Evalset accuracy
 
 | Adapter | Checker 4 | Checker 3 | CypherBench | gretel | SQaLe | text2cypher | Thought |
 |---|---|---|---|---|---|---|---|
@@ -153,6 +153,7 @@ which the dashboard reads) and in `state.json`.
 | step 1500 (~5.1e-5) | **45.4%** | 45.9% | 49.0% | 62.0% | 41.3% | 23.7% | 200/200, median 674 chars |
 | step 2000 (~2.5e-5) | **41.9%** | 42.3% | 46.9% | 62.0% | 34.8% | 17.9% | 200/200, median 836 chars |
 | step 2500 (~0.6e-5) | **42.5%** | 42.9% | 44.0% | 60.0% | 45.6% | 15.0% | 200/200, median 814 chars |
+| final, step 2961 (annealed to 0) | **40.7%** (74/182) | 41.1% | 38.8% | 61.2% | 42.2% | 15.4% | 200/200, median ~750 chars |
 | *P9 final, for reference (240 steps, annealed to 0)* | *41.8%* (76/182) | | *44.0%* | *64.0%* | *38.6%* | *13.2%* | *200/200, 810 chars* |
 | *base model* | | *30.6%* | | | | | |
 
@@ -179,6 +180,32 @@ even if the final is the best on the evalset (`state.json`: `best_on_evalset`, `
 adapter that is merged into the base and pushed to Hugging Face. Picking the better of two on the
 test set flatters the winner's score by under a point (its noise is ~1.5 points); nothing else
 is chosen on it.
+
+The final adapter scored lowest of the late snapshots on the evalset, within noise of all of them
+(from step 1500 to the final: 5 questions became right and 11 wrong, p ≈ 0.21).
+
+### The test set, and the adapter chosen
+
+Run 2026-10-31 (training finished at 20:42 UTC; scoring and testing done by 22:15). 1,000
+questions, 250 from each dataset's test split, never trained on or used for any earlier choice:
+
+| Adapter | Checker 4 | Checker 3 | CypherBench | gretel | SQaLe | text2cypher | Well-formed call | Query parses | Thought |
+|---|---|---|---|---|---|---|---|---|---|
+| final, step 2961 | 42.2% (381/902) | 41.9% | 35.9% | 61.3% | 44.3% | 24.0% | 96.9% | 95.7% | 1000/1000, median 687 chars |
+| **step 1500** | **43.9%** (401/913) | 43.9% | 37.6% | 62.9% | 42.5% | 29.2% | 98.6% | 96.9% | 1000/1000, median 644 chars |
+
+Question by question, on the 873 questions scored for both: step 1500 alone right on 65, the final
+alone on 52 (p ≈ 0.27); step 1500 is ahead by 1.5 points (paired standard error 1.2, 95% range
+-0.9 to +3.9). Not significant on its own, but both held-out sets point the same way, step 1500 is
+ahead on three of the four datasets and writes fewer broken calls, and nothing favours the final.
+**Rishi chose step 1500 (2026-10-31)**: `adapter_step001500` is the SFT adapter that is merged
+and pushed to Hugging Face. Its honest score is the test set's 43.9%, not the evalset's 45.4%,
+which was the best of six and so flattered. The base model scored 30.2% on the evalset (checker 4)
+and was not run on the test set, so "~13 points over the base" is an estimate across the two sets.
+
+Seen in the answers: some spend their one query looking around first (`SELECT DISTINCT home_type,
+marry_status FROM ...`), which a single-turn test scores as wrong. That is the habit a multi-turn
+environment would reward (`docs/rl.md`).
 
 ## The dashboard
 
