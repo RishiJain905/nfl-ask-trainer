@@ -4,7 +4,7 @@
     ask-trainer train --config configs/sft_plain.yaml [--seed N] [--name X] [--launched-by rishi]
     ask-trainer train --resume <run folder or name>
     ask-trainer predict --run DIR --data FILE [--n 160] [--verify]
-    ask-trainer merge --run DIR [--out DIR]
+    ask-trainer merge --run DIR [--out DIR] [--adapter adapter_step001500] [--thinking]
     ask-trainer probe [probe_model.py args]
     ask-trainer public ...                  # = python -m asktrainer.data.public ...
 
@@ -241,10 +241,11 @@ def merge_cmd(args) -> int:
 
     run = Path(args.run)
     cfg_json = json.loads((run / "config.json").read_text(encoding="utf-8"))
-    adapter = run / "adapter"
+    adapter = run / args.adapter
     out = Path(args.out) if args.out else run / "merged"
     card = {
         "run": cfg_json.get("run", run.name),
+        "adapter_folder": args.adapter,
         "data_version": cfg_json.get("nfl_version"),
         "objective": cfg_json.get("objective"),
         "seed": cfg_json.get("seed"),
@@ -252,7 +253,7 @@ def merge_cmd(args) -> int:
         "jepa": cfg_json.get("jepa") if cfg_json.get("objective") == "jepa" else None,
     }
     base = cfg_json.get("base_model") or str(get_paths().base_model)
-    merge_and_save(adapter, out, base, card=card, device=args.device)
+    merge_and_save(adapter, out, base, card=card, device=args.device, thinking=args.thinking)
     return 0
 
 
@@ -379,6 +380,12 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--run", required=True)
     m.add_argument("--out", default=None)
     m.add_argument("--device", default="cuda")
+    m.add_argument("--adapter", default="adapter",
+                   help="the adapter folder in the run (default: the final one, `adapter`; "
+                   "e.g. adapter_step001500)")  # fmt: skip
+    m.add_argument("--thinking", action="store_true",
+                   help="keep the base's chat template (thinking on by default) and "
+                   "generation settings; without it, thinking off and greedy")  # fmt: skip
     tr = sub.add_parser(
         "traces", help="thinking-trace runs: `traces prep` writes questions and plan"
     )

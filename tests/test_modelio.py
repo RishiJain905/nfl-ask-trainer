@@ -84,3 +84,21 @@ def test_merge_and_save(base_dir, tmp_path, tiny_tok):
     with torch.no_grad():
         got = merged(input_ids=ids).logits
     assert torch.allclose(got, want, atol=1e-4)
+
+
+def test_merge_with_thinking_keeps_the_base_template_and_generation(base_dir, tmp_path, tiny_tok):
+    d, _ = base_dir
+    gen = {"do_sample": True, "temperature": 1.0, "top_p": 0.95}
+    (d / "generation_config.json").write_text(json.dumps(gen), encoding="utf-8")
+    model, _, _ = load_base(d, device="cpu", dtype=torch.float32, log=lambda *_: None)
+    pm = apply_lora(model, LoraSpec(r=4, alpha=8, dropout=0.0, targets=LLAMA_TARGETS),
+                    gradient_checkpointing=False)  # fmt: skip
+    adapter = save_adapter(pm, tmp_path / "adapter")
+    out = merge_and_save(adapter, tmp_path / "merged", d, device="cpu", log=lambda *_: None,
+                         dtype=torch.float32, thinking=True)  # fmt: skip
+    assert (out / "chat_template.jinja").read_text() == tiny_tok.chat_template
+    assert (
+        "default(true)" in json.loads((out / "tokenizer_config.json").read_text())["chat_template"]
+    )
+    assert json.loads((out / "generation_config.json").read_text()) == gen
+    assert "true" in json.loads((out / "ask_model_card.json").read_text())["chat_template"]

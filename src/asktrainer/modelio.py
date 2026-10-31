@@ -190,11 +190,14 @@ def merge_and_save(
     device: str = "cuda",
     log=print,
     dtype: torch.dtype = torch.bfloat16,
+    thinking: bool = False,
 ) -> Path:
     """Merge a LoRA adapter into the bf16 base and write a servable model folder: the merged
-    weights (safetensors), the remote code files, the tokenizer, a `chat_template.jinja` whose
-    `enable_thinking` defaults to false (also in `tokenizer_config.json`), a greedy
-    `generation_config.json`, and `ask_model_card.json` (base, run, data version, objective)."""
+    weights (safetensors), the remote code files, the tokenizer, `chat_template.jinja` (also in
+    `tokenizer_config.json`), `generation_config.json` and `ask_model_card.json` (base, run, data
+    version, objective). `thinking=False` (the NFL adapter, trained thinking off): the template's
+    `enable_thinking` defaults to false and generation is greedy. `thinking=True` (the general
+    agent, trained and scored thinking): the base's template and generation settings, unchanged."""
     from peft import PeftModel
 
     base_dir, out = Path(base_dir), Path(out_dir)
@@ -209,7 +212,7 @@ def merge_and_save(
     for name in ("LICENSE",):
         if (base_dir / name).exists():
             shutil.copy2(base_dir / name, out / name)
-    template = no_thinking_template(tok.chat_template)
+    template = tok.chat_template if thinking else no_thinking_template(tok.chat_template)
     tok.chat_template = template
     tok.save_pretrained(str(out))
     (out / "chat_template.jinja").write_text(template, encoding="utf-8")
@@ -219,15 +222,16 @@ def merge_and_save(
     tc_path.write_text(json.dumps(tc, indent=2, ensure_ascii=False), encoding="utf-8")
     gen_path = base_dir / "generation_config.json"
     gen = json.loads(gen_path.read_text(encoding="utf-8")) if gen_path.exists() else {}
-    gen.update({"do_sample": False, "temperature": None, "top_p": None})
-    gen = {k: v for k, v in gen.items() if v is not None}
+    if not thinking:
+        gen.update({"do_sample": False, "temperature": None, "top_p": None})
+        gen = {k: v for k, v in gen.items() if v is not None}
     (out / "generation_config.json").write_text(json.dumps(gen, indent=2), encoding="utf-8")
     card = {
         "base": str(base_dir),
         "adapter": str(adapter_dir),
         "merged_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "dtype": str(dtype).removeprefix("torch."),
-        "chat_template": "enable_thinking defaults to false",
+        "chat_template": f"enable_thinking defaults to {'true' if thinking else 'false'}",
         **(card or {}),
     }
     (out / "ask_model_card.json").write_text(json.dumps(card, indent=1), encoding="utf-8")
