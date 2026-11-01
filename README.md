@@ -34,6 +34,9 @@ Everything runs inside WSL Ubuntu with the venv `~/venvs/nfl-ask-trainer`:
 | `python -m asktrainer.llamaeval generate --examples <jsonl> --out <preds> --url <server>` (Windows) | answer them through llama-server (a run's LoRA on the Q8_0 base) |
 | `ask-trainer evalrun --run <run> --preds <preds> --tag <tag> --step N` | score those answers into the run's folder and W&B run (no `--run`: the base model) |
 | `python scripts\pilot_sweep.py` (Windows) | the whole pilot sweep, P1-P8 (`docs/pilots.md`) |
+| `powershell -File scripts\llamacpp\release_quants.ps1 -Step <step>` (Windows) | the release GGUFs: convert, calib, imatrix, quantize, kld, bench (`docs/release.md`) |
+| `python scripts\release_eval.py [--testset] [--gguf <file> --label <name>]` (Windows) | score the release GGUFs on the evalset / test set |
+| `python scripts\release_upload.py [--only bf16,gguf,lora]` (Windows) | upload the release to Hugging Face |
 
 Tests run on the CPU: `HIP_VISIBLE_DEVICES= CUDA_VISIBLE_DEVICES= python -m pytest -q`;
 `ASKTRAINER_GPU_TESTS=1 python -m pytest -m gpu` runs `tests/test_gpu.py` on the real model.
@@ -105,6 +108,9 @@ vs ~20 tok/s for transformers at batch 1). Build, quantisation, measurements and
 `ask-trainer merge --run <run>` writes `<run>/merged/`: merged bf16 safetensors, the remote
 code, the tokenizer, a `chat_template.jinja` (and `tokenizer_config.json`) whose
 `enable_thinking` defaults to false, a greedy `generation_config.json`, `ask_model_card.json`.
+`--adapter adapter_stepNNNNNN` merges a snapshot instead of the final adapter; `--thinking` keeps
+the base's template and generation config (thinking on). The published release (merged, GGUFs,
+LoRA on Hugging Face): `docs/release.md`.
 
 ## Measured on this machine (RX 7800 XT, 16 GB; LoRA r16, hipBLASLt, batch 1 unless noted)
 
