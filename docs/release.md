@@ -79,15 +79,17 @@ folders points back to this PC; the last section explains how that was checked.
 
 **The quants:**
 
-| Quant | Size | KLD vs BF16 | Same top token | Evalset (200) | tok/s |
-|---|---|---|---|---|---|
-| Q8_0 | 4.38 GB | 0.0005 | 99.45% | 43.2% | 90 |
-| Q6_K_XL | 3.69 GB | 0.0016 | 99.08% | 44.5% | 105 |
-| Q6_K | 3.38 GB | 0.0026 | 98.81% | 41.5% | 119 |
-| Q4_K_XL | 2.85 GB | 0.0119 | 97.36% | 42.7% | 126 |
-| Q4_K_M | 2.60 GB | 0.0224 | 96.51% | 42.5% | 138 |
+| Quant | Size | KLD vs BF16 | Same top token | Evalset (200) |
+|---|---|---|---|---|
+| Q8_0 | 4.38 GB | 0.0005 | 99.45% | 43.2% |
+| Q6_K_XL | 3.69 GB | 0.0016 | 99.08% | 44.5% |
+| Q6_K | 3.38 GB | 0.0026 | 98.81% | 41.5% |
+| Q4_K_XL | 2.85 GB | 0.0119 | 97.36% | 42.7% |
+| Q4_K_M | 2.60 GB | 0.0224 | 96.51% | 42.5% |
 
-- The adapter itself scored 45.4% on the evalset, and BF16 runs at 58 tok/s.
+- The adapter itself scored 45.4% on the evalset.
+- The cards leave out speed, since it depends on the reader's hardware. `bench` still runs
+  (on the RX 7800 XT: Q8_0 90 tok/s, Q4_K_M 138, BF16 58).
 - On 200 questions, ±3.5 points is noise, so the KLD column ranks the quants, not the evalset.
 - **XL** is our own recipe, not Unsloth's UD: the tied embedding / output head at Q8_0, and every
   attention matrix one step up (Q6_K to Q8_0, Q4_K_M to Q6_K). For Q4 this halves the KLD for
